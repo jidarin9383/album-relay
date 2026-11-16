@@ -1,0 +1,33 @@
+export type SourceName = 'aoty' | 'rym' | 'pitchfork';
+export type SourceState = 'unknown' | 'ok' | 'missing' | 'blocked' | 'error' | 'running';
+export interface Observation {
+  source: SourceName; score: number | null; scale: number; votes: number | null;
+  votesDisplay?: string; bestNewMusic?: boolean; url: string; observedAt: string;
+  status: SourceState; notes?: string;
+}
+export interface Track { id: string; originalId: number; name: string; duration?: number }
+export interface MatchedAlbum { id: string; originalId: number; name: string; artist: string; releaseDate: string; tracks: Track[] }
+export interface Decision { status: 'selected' | 'pending' | 'disagreement' | 'excluded' | 'too_new' | 'out_of_window' | 'format_conflict'; qualifyingSources: SourceName[]; reasons: string[] }
+export interface Album {
+  id: string; artist: string; title: string; releaseDate: string; format: 'LP' | 'EP' | 'Reissue' | 'Unknown';
+  coverUrl?: string; genres: string[]; sources: Observation[]; excluded: boolean;
+  decision?: Decision; match?: MatchedAlbum | null; admittedMonth?: string; rationale?: string;
+}
+export interface Settings {
+  lookbackDays: number; minimumAgeDays: number; minSources: number;
+  thresholds: { aoty: { score: number; votes: number; negative: number }; rym: { score: number; votes: number; negative: number }; pitchfork: { score: number; negative: number; allowBnm: boolean } };
+  sources: Record<SourceName, boolean>;
+  schedule: { enabled: boolean; weekday: number; hour: number; minute: number; timezone: string };
+  playlist: { namePattern: string; descriptionMaxChars: number };
+  requestDelayMs: number;
+}
+export interface SourceStatus { source: SourceName; status: SourceState; checkedAt?: string; message: string; coverage?: string }
+export interface Playlist { month: string; id: string; originalId: number; name: string; url: string; albumIds: string[]; trackCount: number; updatedAt: string }
+export type RunMode = 'refresh' | 'preview' | 'sync';
+export type RunState = 'queued' | 'running' | 'waiting_verification' | 'partial' | 'succeeded' | 'failed' | 'cancelled';
+export interface RunLog { at: string; level: 'info' | 'warning' | 'error'; message: string }
+export interface SyncPreview { descriptionMaxChars?: number; month: string; playlistName: string; albums: Album[]; trackCount: number; existingPlaylist: Playlist | null; warnings: string[] }
+export interface Run { id: string; mode: RunMode; status: RunState; stage: string; message: string; startedAt: string; finishedAt?: string; logs: RunLog[]; preview?: SyncPreview }
+export interface ConnectionStatus { configured: boolean; loggedIn: boolean; message: string; checking?: boolean; qrCodeUrl?: string; loginState?: 'idle' | 'waiting' | 'authorized' | 'expired' | 'error' }
+export interface Overview { albums: number; selected: number; pending: number; disagreements: number; playlists: Playlist[]; lastRun: Run | null; nextRun: string | null; sourceStatuses: SourceStatus[]; connection: ConnectionStatus }
+export interface VerificationStatus { available: boolean; active: boolean; message: string; url?: string; source?: SourceName }
