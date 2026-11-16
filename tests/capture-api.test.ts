@@ -3,11 +3,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../server/app.js';
+import { NeteaseClient } from '../server/netease.js';
 import { SourceBrowser } from '../server/sources/browser.js';
 import { CaptureError } from '../server/sources/charts.js';
 import { SourceService } from '../server/sources/index.js';
 import { Store } from '../server/store.js';
-import { rymChart } from './fixtures/charts.js';
+import { aotyChart, rymChart } from './fixtures/charts.js';
 it('recovers a source action interrupted before any run was created',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'relay-capture-restart-'));const before=new Store(dir);before.acquireLock('http-action:interrupted');before.close();
  const app=await createApp({dataDir:dir,scheduler:false});const after=new Store(dir);
@@ -81,6 +82,71 @@ it('reports interactive browser availability accurately across local, CDP and VN
   restore('BROWSER_UI_URL',saved.BROWSER_UI_URL);
   restore('BROWSER_CDP_URL',saved.BROWSER_CDP_URL);
   restore('BROWSER_HEADLESS',saved.BROWSER_HEADLESS);
+  rmSync(dir,{recursive:true,force:true});
+ }
+});
+it('completes capture, library_preview and sync end-to-end through HTTP without scraping sources',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'relay-library-preview-api-'));
+ const release=new Date(Date.now()-20*86400000);
+ const months=['January','February','March','April','May','June','July','August','September','October','November','December'];
+ const rymDate=`${release.getUTCDate()} ${months[release.getUTCMonth()]} ${release.getUTCFullYear()}`;
+ const aotyDate=`${months[release.getUTCMonth()]} ${release.getUTCDate()}, ${release.getUTCFullYear()}`;
+ const isoDate=release.toISOString().slice(0,10);
+ const rymHtml=rymChart.replace('30 October 2026',rymDate);
+ const aotyHtml=aotyChart.replace('October 30, 2026',aotyDate);
+ let current={html:rymHtml,url:'https://rateyourmusic.com/charts/top/album/2026/1/'};
+ let reads=0;
+ const browser={connected:true,async read(){reads++;return {html:'',status:500}},async current(){return current},async verification(){return {available:true,active:true,message:'ok'}},async close(){}};
+ let playlistName='',playlistDesc='';
+ let tracks:{id:string;originalId:number;name:string}[]=[];
+ const netease=new NeteaseClient(dir,{command:async(args)=>{
+  const cmd=`${args[0]} ${args[1]}`;
+  if(cmd==='search album')return {code:200,data:{records:[{id:'alb-1',originalId:101,name:'Moon',artists:[{name:'Stars'}],publishTime:Date.parse(`${isoDate}T00:00:00Z`)}]}};
+  if(cmd==='album tracks')return {code:200,data:[{id:'tr-1',originalId:1001,name:'Track One'},{id:'tr-2',originalId:1002,name:'Track Two'}]};
+  if(cmd==='playlist create'){const idx=args.indexOf('--playlistName');playlistName=idx>=0?args[idx+1]!:'';return {code:200,data:{id:'pl-1',originalId:5001}};}
+  if(cmd==='playlist tracks')return {code:200,data:tracks};
+  if(cmd==='playlist add'){const idx=args.indexOf('--songIdList');const ids=JSON.parse(args[idx+1]!) as string[];tracks=tracks.concat(ids.map((id,i)=>({id,originalId:1001+i,name:`Track ${i+1}`})));return {code:200,data:{}};}
+  if(cmd==='playlist reorder'){const idx=args.indexOf('--trackIds');const ids=JSON.parse(args[idx+1]!) as string[];tracks=ids.map(id=>tracks.find(t=>t.id===id)!);return {code:200,data:{}};}
+  if(cmd==='playlist updateDesc'){const idx=args.indexOf('--desc');playlistDesc=idx>=0?args[idx+1]!:'';return {code:200,data:{}};}
+  if(cmd==='playlist get')return {code:200,data:{name:playlistName,describe:playlistDesc,trackCount:tracks.length}};
+  throw new Error(`Unexpected command: ${cmd}`);
+ }});
+ const app=await createApp({dataDir:dir,scheduler:false,sources:new SourceService(dir,browser),netease});
+ const waitRun=async(id:string,cookie:string)=>{
+  for(let i=0;i<50;i++){
+   const res=await app.inject({url:`/api/runs/${id}`,headers:{cookie}});
+   const run=res.json();
+   if(!['queued','running'].includes(run.status))return run;
+   await new Promise(r=>setTimeout(r,20));
+  }
+  throw new Error('Run timed out');
+ };
+ try{
+  const setup=await app.inject({method:'POST',url:'/api/setup',payload:{password:'library-preview-pass-123'}});
+  const cookie=setup.headers['set-cookie'] as string;
+  expect((await app.inject({method:'POST',url:'/api/sources/rym/capture',headers:{cookie}})).statusCode).toBe(200);
+  current={html:aotyHtml,url:'https://www.albumoftheyear.org/ratings/user-highest-rated/lp/2026/'};
+  expect((await app.inject({method:'POST',url:'/api/sources/aoty/capture',headers:{cookie}})).statusCode).toBe(200);
+  const settings=(await app.inject({url:'/api/settings',headers:{cookie}})).json();
+  settings.allowApproximateVotes=true;
+  expect((await app.inject({method:'PUT',url:'/api/settings',headers:{cookie},payload:settings})).statusCode).toBe(200);
+  const previewStart=await app.inject({method:'POST',url:'/api/runs',headers:{cookie},payload:{mode:'library_preview'}});
+  expect(previewStart.statusCode).toBe(200);
+  const previewRun=await waitRun(previewStart.json().id,cookie);
+  expect(previewRun.status).toBe('succeeded');
+  expect(previewRun.preview.albums).toHaveLength(1);
+  expect(previewRun.preview.trackCount).toBe(2);
+  expect(reads).toBe(0);
+  const syncStart=await app.inject({method:'POST',url:'/api/runs',headers:{cookie},payload:{mode:'sync'}});
+  expect(syncStart.statusCode).toBe(200);
+  const syncRun=await waitRun(syncStart.json().id,cookie);
+  expect(syncRun.status).toBe('succeeded');
+  const playlists=(await app.inject({url:'/api/playlists',headers:{cookie}})).json();
+  expect(playlists).toHaveLength(1);
+  expect(playlists[0]).toMatchObject({id:'pl-1',originalId:5001,trackCount:2});
+  expect(playlists[0].albumIds).toHaveLength(1);
+ }finally{
+  await app.close();
   rmSync(dir,{recursive:true,force:true});
  }
 });

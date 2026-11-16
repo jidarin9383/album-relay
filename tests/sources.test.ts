@@ -39,3 +39,17 @@ it('stops a blocked site chain, preserving previous observation dates and values
  try{const updates=vi.fn();const result=await service.refresh(settings,[old],()=>{},updates);expect(updates).toHaveBeenCalledWith(expect.objectContaining({source:'aoty',status:'blocked'}));expect(fetchMock).toHaveBeenCalledTimes(1);expect(result.statuses.find(s=>s.source==='aoty')?.status).toBe('blocked');expect(result.albums[0]?.sources[0]).toMatchObject({score:81,status:'blocked',observedAt:'2026-10-01T00:00:00Z'});expect(old.sources[0]?.status).toBe('ok');}finally{vi.unstubAllGlobals();await service.close();await rm(dir,{recursive:true,force:true});}
 });
 it('marks a source incomplete when a cross-check request fails after discovery',async()=>{const dir=await mkdtemp(join(tmpdir(),'source-error-'));const mock=vi.fn().mockResolvedValueOnce(new Response('<a href="/album/1-test.php">A</a>')).mockResolvedValueOnce(new Response('')).mockResolvedValueOnce(new Response('<div class="artist">Other</div><div class="albumTitle">Record</div><div class="albumUserScore">85</div><div class="userScoreBox">200 ratings</div><div class="detailRow">October 30, 2026 / release date</div><div class="detailRow">LP / format</div>')).mockRejectedValue(new Error('network'));vi.stubGlobal('fetch',mock);const settings={sources:{aoty:true,rym:false,pitchfork:false},lookbackDays:90,requestDelayMs:0} as Settings;const candidate:Album={id:'candidate',artist:'A',title:'B',releaseDate:new Date().toISOString().slice(0,10),format:'LP',genres:[],excluded:false,sources:[]};const service=new SourceService(dir);try{const result=await service.refresh(settings,[candidate],()=>{});expect(result.statuses.find(s=>s.source==='aoty')?.status).toBe('error');}finally{vi.unstubAllGlobals();await service.close();await rm(dir,{recursive:true,force:true});}});
+it('preserves fresh browser-capture observations when background refresh is blocked',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'source-capture-preserve-'));
+ const fetchMock=vi.fn().mockResolvedValue(new Response('Verification required',{status:403}));
+ vi.stubGlobal('fetch',fetchMock);
+ const settings={sources:{aoty:true,rym:false,pitchfork:false},lookbackDays:90,requestDelayMs:0} as Settings;
+ const recentCapture=new Date(Date.now()-2*86400000).toISOString();
+ const captured:Album={id:'cap',artist:'Stars',title:'Moon',releaseDate:new Date(Date.now()-20*86400000).toISOString().slice(0,10),format:'LP',genres:[],excluded:false,sources:[{source:'aoty',score:85,scale:100,votes:4942,url:'https://www.albumoftheyear.org/album/1-stars-moon.php',observedAt:recentCapture,status:'ok',collectionMethod:'browser-capture'}]};
+ const service=new SourceService(dir);
+ try{
+  const result=await service.refresh(settings,[captured],()=>{});
+  expect(result.statuses.find(s=>s.source==='aoty')?.status).toBe('blocked');
+  expect(result.albums[0]?.sources[0]).toMatchObject({score:85,status:'ok',collectionMethod:'browser-capture',observedAt:recentCapture});
+ }finally{vi.unstubAllGlobals();await service.close();await rm(dir,{recursive:true,force:true});}
+});

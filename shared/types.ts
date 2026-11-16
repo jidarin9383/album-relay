@@ -25,7 +25,7 @@ export interface Settings {
 }
 export interface SourceStatus { source: SourceName; status: SourceState; checkedAt?: string; message: string; coverage?: string }
 export interface Playlist { month: string; id: string; originalId: number; name: string; url: string; albumIds: string[]; trackCount: number; updatedAt: string }
-export type RunMode = 'refresh' | 'preview' | 'sync';
+export type RunMode = 'refresh' | 'preview' | 'library_preview' | 'sync';
 export type RunState = 'queued' | 'running' | 'waiting_verification' | 'partial' | 'succeeded' | 'failed' | 'cancelled';
 export interface RunLog { at: string; level: 'info' | 'warning' | 'error'; message: string }
 export interface SyncPreview { descriptionMaxChars?: number; month: string; playlistName: string; albums: Album[]; trackCount: number; existingPlaylist: Playlist | null; warnings: string[] }

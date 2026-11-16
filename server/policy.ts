@@ -1,5 +1,12 @@
 import { createHash } from 'node:crypto';
-import type { Album, Decision, Settings, SourceName } from '../shared/types.js';
+import type { Album, Decision, Observation, Settings, SourceName } from '../shared/types.js';
+export const SCRAPE_TTL_MS=6*3600000;
+export const CAPTURE_TTL_MS=7*86400000;
+export function isObservationFresh(o:Observation,now=Date.now()):boolean {
+ const at=Date.parse(o.observedAt);
+ if(!Number.isFinite(at))return false;
+ return now-at<(o.collectionMethod==='browser-capture'?CAPTURE_TTL_MS:SCRAPE_TTL_MS);
+}
 export const defaultSettings: Settings = { allowApproximateVotes:false, lookbackDays:90, minimumAgeDays:7, minSources:2, thresholds:{aoty:{score:80,votes:100,negative:70},rym:{score:3.5,votes:100,negative:3},pitchfork:{score:8,negative:7,allowBnm:true}},sources:{aoty:true,rym:true,pitchfork:true},schedule:{enabled:false,weekday:3,hour:12,minute:0,timezone:'Asia/Taipei'},playlist:{namePattern:'高分新专辑｜YYYY-MM',descriptionMaxChars:1000},requestDelayMs:6000};
 export function todayInTimezone(timezone:string,now=new Date()):string {
  const parts=new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now);

@@ -9,10 +9,14 @@ export function planSync(albums: Album[], settings: Settings, playlists: Playlis
   const other = new Set(playlists.filter(p=>p.month!==month).flatMap(p=>p.albumIds));
   const retained = albums.filter(a=>current.has(a.id) || a.admittedMonth===month);
   const fresh = albums.filter(a=>!current.has(a.id) && !a.admittedMonth && !other.has(a.id) && !a.excluded && a.decision?.status==='selected' && a.match?.tracks.length);
+  const unmatched = albums.filter(a=>!current.has(a.id) && !a.admittedMonth && !other.has(a.id) && !a.excluded && a.decision?.status==='selected' && !a.match?.tracks.length);
   const combined = [...retained, ...fresh].filter((a,i,all)=>all.findIndex(b=>b.id===a.id)===i);
   return { descriptionMaxChars:settings.playlist.descriptionMaxChars, month, playlistName:playlistName(settings.playlist.namePattern,month), albums:combined,
     trackCount:new Set(combined.flatMap(a=>a.match?.tracks.map(t=>t.id) ?? [])).size, existingPlaylist:existing,
-    warnings:retained.filter(a=>!a.match?.tracks.length).map(a=>`${a.artist} — ${a.title}：已收录专辑缺少曲目，保留原歌单内容`) };
+    warnings:[
+      ...retained.filter(a=>!a.match?.tracks.length).map(a=>`${a.artist} — ${a.title}：已收录专辑缺少曲目，保留原歌单内容`),
+      ...unmatched.map(a=>`${a.artist} — ${a.title}：没有唯一完整匹配，暂不写入`)
+    ] };
 }
 export interface PlaylistClient {
   tracks(id:string):Promise<Track[]>; create(name:string):Promise<{id:string;originalId:number}>;

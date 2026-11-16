@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
 import type { Album, MatchedAlbum, Playlist, Run, RunMode, Settings, SourceStatus, SyncPreview } from '../shared/types.js';
-import { decide, todayInTimezone } from './policy.js';
+import { decide, isObservationFresh, todayInTimezone } from './policy.js';
 import { planSync } from './planner.js';
 export interface RunnerStore {
  settings():Settings; albums():Album[];saveAlbums(albums:Album[]):void;playlists():Playlist[];savePlaylist(playlist:Playlist):void;runs():Run[];saveRun(run:Run):void;
@@ -36,7 +36,7 @@ export class Runner {
     const reevaluated=stored.map(a=>({...a,decision:decide(a,settings,today(settings))}));const preview=planSync(reevaluated,settings,this.store.playlists());
     if(hash(preview)!==hash(saved.preview))throw new Error('入选条件、月份或歌单已变化，请重新生成预览');
     const fresh=preview.albums.filter(a=>!a.admittedMonth&&!preview.existingPlaylist?.albumIds.includes(a.id));
-    for(const album of fresh){if(album.sources.some(o=>settings.sources[o.source]&&o.status==='ok'&&(!Number.isFinite(Date.parse(o.observedAt))||Date.now()-Date.parse(o.observedAt)>=6*3600000)))throw new Error('来源评分已过期，请重新生成预览');if(album.decision?.status!=='selected'||!album.match?.tracks.length)throw new Error('预览含未通过核验的专辑');const match=await this.netease.match(album);if(!match||hash(match)!==hash(album.match))throw new Error('网易云专辑或曲目已变化，请重新生成预览');}
+    for(const album of fresh){if(album.sources.some(o=>settings.sources[o.source]&&o.status==='ok'&&!isObservationFresh(o)))throw new Error('来源评分已过期，请重新生成预览');if(album.decision?.status!=='selected'||!album.match?.tracks.length)throw new Error('预览含未通过核验的专辑');const match=await this.netease.match(album);if(!match||hash(match)!==hash(album.match))throw new Error('网易云专辑或曲目已变化，请重新生成预览');}
     run.preview=preview;
     if(!fresh.length){run.status='succeeded';run.stage='complete';this.log(run,'没有新的可同步专辑，未创建空歌单');return;}
     // Consumes a preview before the first write; a retry must create a new one from persisted checkpoints.
@@ -46,19 +46,32 @@ export class Runner {
     this.store.savePlaylist(playlist);const admitted=new Set(playlist.albumIds);this.store.saveAlbums(stored.map(a=>admitted.has(a.id)?{...a,admittedMonth:a.admittedMonth??playlist.month}:a));
     run.status='succeeded';run.stage='complete';this.log(run,'同步与歌单回读校验完成');
    }else{
-    run.stage='sources';this.log(run,'获取来源与交叉评分');const result=await this.sources.refresh(settings,this.store.albums(),progress,status=>{this.store.saveSourceStatuses([...this.store.sourceStatuses().filter(s=>s.source!==status.source),status]);});this.store.saveSourceStatuses(result.statuses);
-    const albums=result.albums.map(a=>({...a,decision:decide(a,settings,today(settings))}));this.store.saveAlbums(albums);
-    const blocked=result.statuses.some(s=>s.status==='blocked');let incomplete=result.statuses.some(s=>['error','blocked'].includes(s.status));
-    if(run.mode==='preview'){
+    let albums:Album[],blocked=false,incomplete=false;
+    if(run.mode==='library_preview'){
+     run.stage='library';this.log(run,'评估资料库已保存的专辑与评分证据');
+     const d=today(settings);
+     albums=this.store.albums().map(a=>{
+      const copy=structuredClone(a);
+      for(const o of copy.sources){if(settings.sources[o.source]&&o.status==='ok'&&!isObservationFresh(o)){o.status='error';o.notes=[o.notes,'评分记录已超过有效期，保留历史证据但需重新收录或采集后再参与筛选。'].filter(Boolean).join(' ');}}
+      copy.decision=decide(copy,settings,d);
+      return copy;
+     });
+     this.store.saveAlbums(albums);
+    }else{
+     run.stage='sources';this.log(run,'获取来源与交叉评分');const result=await this.sources.refresh(settings,this.store.albums(),progress,status=>{this.store.saveSourceStatuses([...this.store.sourceStatuses().filter(s=>s.source!==status.source),status]);});this.store.saveSourceStatuses(result.statuses);
+     albums=result.albums.map(a=>({...a,decision:decide(a,settings,today(settings))}));this.store.saveAlbums(albums);
+     blocked=result.statuses.some(s=>s.status==='blocked');incomplete=result.statuses.some(s=>['error','blocked'].includes(s.status));
+    }
+    if(run.mode==='preview'||run.mode==='library_preview'){
      run.stage='matching';this.log(run,'逐张匹配网易云完整专辑');
      for(const album of albums.filter(a=>a.decision?.status==='selected'&&!a.admittedMonth)){
-      try{album.match=await this.netease.match(album);if(!album.match){incomplete=true;this.log(run,`${album.artist} — ${album.title}：没有唯一完整匹配，暂不写入`,'warning');}}
+      try{album.match=await this.netease.match(album);if(!album.match){this.log(run,`${album.artist} — ${album.title}：没有唯一完整匹配，暂不写入`,'warning');}}
       catch{album.match=null;incomplete=true;this.log(run,`${album.artist} — ${album.title}：网易云匹配失败`,'warning');}
      }
      this.store.saveAlbums(albums);const preview=planSync(albums,settings,this.store.playlists());run.preview=preview;
      this.store.setValue('latest-preview',JSON.stringify({runId:run.id,createdAt:stamp(),settingsHash:hash(settings),albumsHash:hash(albums),preview,usable:!incomplete} satisfies SavedPreview));
     }
-    const hasUsable=albums.some(a=>a.decision?.status==='selected');run.status=blocked&&!hasUsable?'waiting_verification':incomplete?'partial':'succeeded';run.stage=run.status==='waiting_verification'?'verification':'complete';this.log(run,run.status==='succeeded'?'任务完成':run.status==='waiting_verification'?'来源需要人工验证，完成后请重试':'部分来源或匹配尚未完成，未进行网易云写入',incomplete?'warning':'info');
+    const hasUsable=albums.some(a=>a.decision?.status==='selected');run.status=blocked&&!hasUsable?'waiting_verification':incomplete?'partial':'succeeded';run.stage=run.status==='waiting_verification'?'verification':'complete';this.log(run,run.status==='succeeded'?(run.mode==='library_preview'?'资料库预览完成':'任务完成'):run.status==='waiting_verification'?'来源需要人工验证，完成后请重试':'部分来源或匹配尚未完成，未进行网易云写入',incomplete?'warning':'info');
    }
   }catch(e){run.status=writeStarted?'partial':'failed';run.stage=writeStarted?'partial_write':'error';const raw=e instanceof Error?e.message:'任务失败';const safe=/token|cookie|private.?key|authorization|secret/i.test(raw)?'连接请求失败，请检查配置':raw.slice(0,300);this.log(run,checkpointed?`歌单已留下检查点，部分步骤未完成：${safe}`:writeStarted?`写入可能已发生，请核对现有歌单后重试：${safe}`:safe,'error');}
   finally{run.finishedAt=stamp();try{this.store.saveRun(run);}finally{this.store.releaseLock(run.id);}}

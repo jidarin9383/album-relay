@@ -9,6 +9,7 @@ Album Relay can save ratings from an already-open RYM or AOTY chart into its pri
 3. Follow **Enter private browser** and wait for the chart to load. Complete a human challenge yourself if the site requests one. Use the same provided browser tab; do not open a separate browser tab for the chart.
 4. Return to Album Relay and click **Capture current chart** for that source. This action reads the current document without following its detail links. It captures at most 60 rows per action.
 5. Repeat for the other source. Review the album library, decision reasons and capture history. No NetEase operation occurs during capture.
+6. When ready to match qualifying albums in your library to NetEase Cloud Music without re-scraping rating sites, click **Library preview (`资料库预览`)** from the capture panel or album library. Review matched tracks and any unmatched warnings, then click **Sync playlist (`同步歌单`)** once NetEase is connected.
 
 The initial links open the current annual RYM album chart and AOTY LP user-score chart. Other supported user charts can be visited in the same private tab. Non-LP-filtered AOTY charts do not establish LP format; they stay pending until reliable matching evidence supplies it. Annual charts are discovery inputs; the configured release-date window still applies.
 
@@ -26,7 +27,7 @@ Capture history is stored in SQLite alongside the library. The UI lists the late
 
 - Capture is user initiated and covers the loaded page, not an exhaustive feed or guaranteed automatic discovery.
 - Source availability checks and background refresh are separate. A successful capture does not declare all source pages accessible.
-- Existing **Generate preview** still performs a background source refresh. A preview based only on saved library evidence is a later increment; captures alone do not establish that the complete playlist-delivery workflow succeeds.
+- **Library preview (`资料库预览`)** evaluates saved library evidence (within a 7-day capture freshness window) without background source scraping, whereas **Generate preview (`生成预览`)** and scheduled runs still perform bounded source refreshes while preserving fresh (< 7 days) `browser-capture` observations if a site blocks automated requests.
 - There is no Pitchfork current-chart capture adapter in this increment. The existing background review adapter remains available.
 - RYM/AOTY access challenges and site permissions still apply. Reading a page successfully does not establish permission to collect or redistribute its data. Keep personal captures private and review upstream terms before use.
 
