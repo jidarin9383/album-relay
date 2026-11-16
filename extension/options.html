@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Album Relay Capture</title>
+  <style>
+    :root { color-scheme: light dark; --line: #8884; --muted: #888; }
+    body { font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    h2 { font-size: 15px; margin: 28px 0 8px; }
+    p.lead, small, .muted { color: var(--muted); }
+    label { display: block; margin: 12px 0 4px; font-weight: 600; }
+    input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: transparent; }
+    button { margin-top: 14px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: #1f6feb; color: #fff; font: inherit; cursor: pointer; }
+    button.secondary { background: transparent; color: inherit; }
+    .status { margin-top: 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); }
+    .ok { color: #16a34a; } .challenge { color: #d97706; } .error { color: #dc2626; } .skipped { color: var(--muted); }
+    ol { padding-left: 18px; } li { margin: 6px 0; word-break: break-all; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; } dt { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <h1>Album Relay Capture</h1>
+  <p class="lead">在你平时用的 Chrome 里打开 RYM / AOTY 榜单、专辑页或 Pitchfork 乐评时，自动送到你的 Album Relay 资料库。不会替你点击或通过任何验证。</p>
+
+  <h2>连接</h2>
+  <label for="server">Album Relay 地址</label>
+  <input id="server" placeholder="http://192.168.1.10:3210" autocomplete="off">
+  <label for="token">配对令牌</label>
+  <input id="token" placeholder="在 Album Relay「连接与来源 → 浏览器扩展」中生成，以 ar_ 开头" autocomplete="off">
+  <button id="save">保存并测试连接</button>
+  <div id="connection" class="status" hidden></div>
+
+  <h2>定时刷新</h2>
+  <p class="muted">开关、时间和页面在 Album Relay 里设置。需要这台 Mac 开着 Chrome。</p>
+  <dl id="refresh"></dl>
+  <button id="run" class="secondary">立即执行一次</button>
+
+  <h2>最近收录</h2>
+  <ol id="recent"><li class="muted">暂无</li></ol>
+
+  <script src="options.js"></script>
+</body>
+</html>

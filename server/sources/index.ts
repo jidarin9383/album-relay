@@ -1,31 +1,29 @@
 import { mkdir, readFile, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { Album, Settings, SourceName, SourceStatus, VerificationStatus } from '../../shared/types.js';
+import type { Album, Settings, SourceName, SourceStatus } from '../../shared/types.js';
 import { normalizeIdentity, origins, isChallenge, parseAoty, parseRym, parsePitchfork, parseIndex } from './parsers.js';
 import { SCRAPE_TTL_MS, isObservationFresh } from '../policy.js';
-import { SourceBrowser, type BrowserReader } from './browser.js';
-import { parseCapturedPage } from './charts.js';
 const names:SourceName[]=['aoty','rym','pitchfork'];
+/** RYM and AOTY sit behind Cloudflare Turnstile and are captured by the paired browser extension, never fetched by the server. */
+export const SERVER_FETCH_SOURCES:SourceName[]=['pitchfork'];
+export const EXTENSION_ONLY_MESSAGE='由浏览器扩展收录：在你的 Chrome 中打开榜单或专辑页即可，服务端不直接访问该站点。';
 const parsers={aoty:parseAoty,rym:parseRym,pitchfork:parsePitchfork};
 const MAX_DETAILS=24, MAX_LOOKUPS=40, PAGES=3, TTL=SCRAPE_TTL_MS;
 class Blocked extends Error{}
 interface CacheEntry { at:number; album:Album }
 /** Bounded public-source acquisition. No account credentials or full articles are stored. */
 export class SourceService {
- private browser:BrowserReader;private blocked=new Set<SourceName>();private last=new Map<SourceName,number>();private cache:Record<string,CacheEntry>={};private loaded=false;
- constructor(private readonly dataDir:string,browser?:BrowserReader){this.browser=browser??new SourceBrowser(dataDir);}
- async captureCurrent(source:SourceName) {const current=await this.browser.current();return parseCapturedPage(source,current.html,current.url);}
- async openChart(source:SourceName):Promise<VerificationStatus>{return this.browser.verification(source,this.indexUrl(source,new Date().getUTCFullYear(),1));}
- async openSearch(source:SourceName,query:string):Promise<VerificationStatus>{return this.browser.verification(source,this.querySearchUrl(source,query));}
- private async load():Promise<void>{if(this.loaded)return;this.loaded=true;try{this.cache=JSON.parse(await readFile(join(this.dataDir,'source-cache.json'),'utf8')) as Record<string,CacheEntry>;}catch{this.cache={};}}
- private async save():Promise<void>{await mkdir(this.dataDir,{recursive:true,mode:0o700});const path=join(this.dataDir,'source-cache.json');await writeFile(path,JSON.stringify(this.cache),{mode:0o600});await chmod(path,0o600);}
+ private blocked=new Set<SourceName>();private last=new Map<SourceName,number>();private cache:Record<string,CacheEntry>={};private loaded=false;
+ private readonly serverFetch:SourceName[];
+ constructor(private readonly dataDir:string,options:{serverFetch?:SourceName[]}={}){this.serverFetch=options.serverFetch??SERVER_FETCH_SOURCES;}
+ private async load():Promise<void>{if(this.loaded)return;this.loaded=true;try{this.cache=JSON.parse(await readFile(join(this.dataDir,'source-cache-v2.json'),'utf8')) as Record<string,CacheEntry>;}catch{this.cache={};}}
+ private async save():Promise<void>{await mkdir(this.dataDir,{recursive:true,mode:0o700});const path=join(this.dataDir,'source-cache-v2.json');await writeFile(path,JSON.stringify(this.cache),{mode:0o600});await chmod(path,0o600);}
  private async html(source:SourceName,url:string,settings:Settings):Promise<string>{
   if(new URL(url).origin!==origins[source])throw new Error('Refusing a source URL outside its canonical origin');
   if(this.blocked.has(source))throw new Blocked(`${source}: blocked; complete verification before retrying`);
   const wait=Math.max(1200,settings.requestDelayMs)-(Date.now()-(this.last.get(source)??0));if(wait>0)await new Promise(r=>setTimeout(r,wait));this.last.set(source,Date.now());
-  let html:string,status:number;
-  if(this.browser.connected){({html,status}=await this.browser.read(url));}
-  else {const response=await fetch(url,{headers:{'User-Agent':'AlbumRelay/0.1 (+self-hosted personal album discovery)','Accept':'text/html'},signal:AbortSignal.timeout(25000),redirect:'follow'});status=response.status;html=await response.text();}
+  const response=await fetch(url,{headers:{'User-Agent':'AlbumRelay/0.1 (+self-hosted personal album discovery)','Accept':'text/html'},signal:AbortSignal.timeout(25000),redirect:'follow'});
+  const status=response.status,html=await response.text();
   if(isChallenge(html,status)){this.blocked.add(source);throw new Blocked(`${source}: HTTP ${status} or verification challenge; site chain stopped`);}
   if(status>=400)throw new Error(`${source}: HTTP ${status}`);
   return html;
@@ -45,7 +43,7 @@ export class SourceService {
  }
  async refresh(settings:Settings,existing:Album[],progress:(message:string)=>void,onStatus?:(status:SourceStatus)=>void):Promise<{albums:Album[];statuses:SourceStatus[]}>{
   await this.load();this.blocked.clear();const map=new Map<string,Album>();for(const a of existing){const copy=structuredClone(a);for(const o of copy.sources){if(settings.sources[o.source]&&o.status==='ok'&&!isObservationFresh(o)){o.status='error';o.notes=[o.notes,o.collectionMethod==='browser-capture'?'浏览器收录记录已超过 7 天有效期，保留历史证据但需重新收录或核验。':'Observation is older than the 6h refresh window; retained as historical evidence until reverified.'].filter(Boolean).join(' ');}}map.set(normalizeIdentity(a.artist)+'|'+normalizeIdentity(a.title),copy);}
-  const statuses:SourceStatus[]=[];const active=names.filter(s=>settings.sources[s]);const cutoff=new Date(Date.now()-settings.lookbackDays*86400000).toISOString().slice(0,10);const nowYear=new Date().getUTCFullYear();const years=[...new Set([nowYear,Number(cutoff.slice(0,4))])];
+  const statuses:SourceStatus[]=[];const active=names.filter(s=>settings.sources[s]&&this.serverFetch.includes(s));const cutoff=new Date(Date.now()-settings.lookbackDays*86400000).toISOString().slice(0,10);const nowYear=new Date().getUTCFullYear();const years=[...new Set([nowYear,Number(cutoff.slice(0,4))])];
   for(const source of active){progress(`Discovering ${source}: bounded recent chart/index pages`);let details=0,errors=0;let message='';try{const urls=new Set<string>();for(const year of source==='pitchfork'?[nowYear]:years){for(let page=1;page<=PAGES;page++){const links=parseIndex(await this.html(source,this.indexUrl(source,year,page),settings),source);for(const u of links)urls.add(u);if(!links.length)break;}}
     const detailUrls=[...urls].slice(0,MAX_DETAILS);for(const [index,url] of detailUrls.entries()){progress(`Reading ${source} album ${index+1}/${detailUrls.length}`);try{const a=await this.detail(source,url,settings);if(a){details++;if(!a.releaseDate||a.releaseDate>=cutoff)this.merge(map,a);}else errors++;}catch(e){if(e instanceof Blocked)throw e;errors++;}}
     message=details?`${details} album detail records parsed${errors?`; ${errors} unavailable or unrecognized`:''}`:'No recognized album details; source layout or access needs review.';
@@ -60,9 +58,9 @@ export class SourceService {
    status.coverage+=` Cross-checks: ${checked}/${candidates.length} candidates, ${matched} exact matches; maximum ${MAX_LOOKUPS} searches and 4 detail results per search.`;onStatus?.(status);
   }
   for(const source of this.blocked){for(const a of map.values()){const obs=a.sources.find(o=>o.source===source);if(obs&&!(obs.collectionMethod==='browser-capture'&&obs.status==='ok'&&isObservationFresh(obs))){obs.status='blocked';obs.notes=[obs.notes,'Refresh blocked; score and observation date retained from previous evidence.'].filter(Boolean).join(' ');}}}
+  for(const source of names.filter(s=>settings.sources[s]&&!this.serverFetch.includes(s)))statuses.push({source,status:'unknown',checkedAt:new Date().toISOString(),message:EXTENSION_ONLY_MESSAGE});
   for(const source of names.filter(s=>!settings.sources[s]))statuses.push({source,status:'unknown',message:'Disabled in settings.'});await this.save();return {albums:[...map.values()],statuses};
  }
- async check(source:SourceName,settings:Settings):Promise<SourceStatus>{this.blocked.delete(source);try{const html=await this.html(source,this.indexUrl(source,new Date().getUTCFullYear(),1),settings);const count=parseIndex(html,source).length;return {source,status:count?'ok':'error',checkedAt:new Date().toISOString(),message:count?`Public index accessible; ${count} links recognized. Not a full refresh.`:'Page accessible but expected source layout not recognized.'};}catch(e){return {source,status:e instanceof Blocked?'blocked':'error',checkedAt:new Date().toISOString(),message:e instanceof Error?e.message:'Source unavailable'};}}
- async verification(source?:SourceName):Promise<VerificationStatus>{return this.browser.verification(source);}
- async close():Promise<void>{await this.browser.close();}
+ async check(source:SourceName,settings:Settings):Promise<SourceStatus>{if(!this.serverFetch.includes(source))return {source,status:'unknown',checkedAt:new Date().toISOString(),message:EXTENSION_ONLY_MESSAGE};this.blocked.delete(source);try{const html=await this.html(source,this.indexUrl(source,new Date().getUTCFullYear(),1),settings);const count=parseIndex(html,source).length;return {source,status:count?'ok':'error',checkedAt:new Date().toISOString(),message:count?`Public index accessible; ${count} links recognized. Not a full refresh.`:'Page accessible but expected source layout not recognized.'};}catch(e){return {source,status:e instanceof Blocked?'blocked':'error',checkedAt:new Date().toISOString(),message:e instanceof Error?e.message:'Source unavailable'};}}
+ async close():Promise<void>{}
 }

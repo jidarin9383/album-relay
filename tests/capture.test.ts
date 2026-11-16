@@ -33,12 +33,16 @@ describe('current chart capture',()=>{
   expect(()=>parseChart('rym','<p>Nothing here</p>',rymUrl)).toThrow();
   expect(()=>parseChart('rym',rymChart.replace('/release/album/stars/moon/','https://evil.example/album'),rymUrl)).toThrow();
  });
- it('requires an explicit opt-in before rounded counts satisfy a vote minimum',()=>{
+ it('uses lower-bound math for rounded counts and requires opt-in inside the rounding interval',()=>{
   const r=parseChart('rym',rymChart,rymUrl).albums[0]!;
   const a=parseChart('aoty',aotyChart,aotyUrl).albums[0]!;
   r.sources.push(...a.sources);
-  expect(decide(r,defaultSettings,'2026-11-16').status).toBe('pending');
-  expect(decide(r,{...defaultSettings,allowApproximateVotes:true},'2026-11-16').status).toBe('selected');
+  // '6k' guarantees >= 5,500 votes, well above default 100.
+  expect(decide(r,defaultSettings,'2026-11-16').status).toBe('selected');
+  // Against a threshold inside the [5500, 6499] uncertainty interval, opt-in is still required.
+  const narrow={...defaultSettings,thresholds:{...defaultSettings.thresholds,rym:{...defaultSettings.thresholds.rym,votes:5800}}};
+  expect(decide(r,narrow,'2026-11-16').status).toBe('pending');
+  expect(decide(r,{...narrow,allowApproximateVotes:true},'2026-11-16').status).toBe('selected');
  });
  it('keeps safe pagination provenance while discarding challenge and tracking parameters',()=>{
   const result=parseChart('aoty',aotyChart,aotyUrl+'?p=2&temporary=discard');
@@ -48,7 +52,10 @@ describe('current chart capture',()=>{
   const a=parseRym('<h1 class="album_title">Moon</h1><span class="album_artist"><a>Stars</a></span><span itemprop="ratingValue">3.9</span><span itemprop="ratingCount">1.2k</span><table><tr><th>Released</th><td>30 October 2026</td></tr></table>','https://rateyourmusic.com/release/album/stars/moon/')!;
   expect(a.sources[0]?.votesApproximate).toBe(true);
   delete a.sources[0]!.votesApproximate;
-  expect(decide(a,{...defaultSettings,minSources:1},'2026-11-16').status).toBe('pending');
+  expect(decide(a,{...defaultSettings,minSources:1},'2026-11-16').status).toBe('selected');
+  const tight={...defaultSettings,minSources:1,thresholds:{...defaultSettings.thresholds,rym:{...defaultSettings.thresholds.rym,votes:1200}}};
+  expect(decide(a,tight,'2026-11-16').status).toBe('pending');
+  expect(decide(a,{...tight,allowApproximateVotes:true},'2026-11-16').status).toBe('selected');
  });
  it('persists corroboration and history across restart without losing exclusions',()=>{
   const dir=mkdtempSync(join(tmpdir(),'relay-capture-'));let store=new Store(dir);
@@ -120,5 +127,11 @@ describe('current chart capture',()=>{
     expect(row.count).toBe(105);
    }finally{db.close();}
   }finally{store.close();rmSync(dir,{recursive:true,force:true});}
+ });
+ it('extracts chart cover URLs when present and ignores data placeholders',()=>{
+  const rymWithImg=rymChart.replace('<div class="page_charts_section_charts_item_title">','<div class="page_charts_section_charts_item_image"><img src="data:image/gif;base64,R0lGODlhAQABAIAAAP" data-src="//e.snmc.io/i/300/s/moon.jpg" /></div><div class="page_charts_section_charts_item_title">');
+  const aotyWithImg=aotyChart.replace('<h2 class="albumListTitle">','<div class="albumListCover"><img data-src="https://cdn2.albumoftheyear.org/375x0/album/1-moon.jpg" /></div><h2 class="albumListTitle">');
+  expect(parseChart('rym',rymWithImg,rymUrl).albums[0]?.coverUrl).toBe('https://e.snmc.io/i/300/s/moon.jpg');
+  expect(parseChart('aoty',aotyWithImg,aotyUrl).albums[0]?.coverUrl).toBe('https://cdn2.albumoftheyear.org/375x0/album/1-moon.jpg');
  });
 });

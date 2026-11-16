@@ -1,0 +1,32 @@
+# Album Relay Capture（Chrome 扩展）
+
+这个扩展让你**平时用的 Chrome** 负责打开 RYM / AOTY / Pitchfork，页面加载完后自动送进 Album Relay 资料库。
+
+- **被动收录（A）**：打开受支持的页面即自动收录，不用点按钮。扩展图标上的角标：`✓` 已收录，灰色 `✓` 30 分钟内收录过（已跳过），`!` 需要你手动验证，`✗` 失败。
+- **定时刷新（B，默认关闭）**：在 Album Relay 里开启后，每天到点由 Chrome 在后台标签页依次打开配置的榜单（每页间隔 30–75 秒），收录完自动关闭标签。遇到验证会立即停下，并把那个标签留给你处理。
+
+扩展不会点击、填写或通过任何验证，也不读取、不转发站点 cookie。
+
+## 支持的页面
+
+| 来源 | 页面 |
+|---|---|
+| RYM | `/charts/top|popular|esoteric/album/...` 榜单；`/release/album|ep|.../艺人/专辑/` 发行页 |
+| AOTY | `/ratings/user-highest-rated/...` 用户评分榜；`/album/<id>-....php` 专辑页 |
+| Pitchfork | `/reviews/albums/<slug>/` 单篇乐评 |
+
+## 安装（一次性）
+
+1. Chrome 打开 `chrome://extensions`，打开右上角「开发者模式」。
+2. 点「加载已解压的扩展程序」，选择本仓库的 `extension/` 目录。
+3. 在 Album Relay「连接与来源 → 浏览器扩展」点「生成配对令牌」。
+4. 点扩展图标打开设置页，填入 Album Relay 地址和令牌，点「保存并测试连接」。Chrome 会询问是否允许访问这个地址，选允许（扩展只获得这一个地址的权限）。
+
+Album Relay 地址：在家用局域网地址（如 `http://192.168.1.10:3210`），本机运行用 `http://127.0.0.1:3210`。
+
+## 注意
+
+- 定时刷新要求这台 Mac 开着 Chrome；Chrome 关闭期间错过的当天任务会在下次打开、过了设定时间后补跑一次。
+- AOTY 的使用条款限制自动采集；定时刷新是否开启由你决定。被动收录只记录你自己打开的页面。
+- 更新扩展代码后，在 `chrome://extensions` 点该扩展的刷新按钮。
+- 冒烟测试：`npx tsx scripts/extension-smoke.ts`（用本地样例页面，不访问真实站点）。

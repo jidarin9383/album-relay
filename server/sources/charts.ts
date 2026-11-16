@@ -1,7 +1,7 @@
 import { load } from 'cheerio';
 import type { Album, ChartCapture, SourceName } from '../../shared/types.js';
 import { albumId } from '../policy.js';
-import { origins, parseReleaseDate, parseVotes, isChallenge, parseAoty, parseRym, parsePitchfork } from './parsers.js';
+import { origins, parseReleaseDate, parseVotes, isChallenge, parseAoty, parseRym, parsePitchfork, cleanImageUrl } from './parsers.js';
 
 export class CaptureError extends Error {}
 function canonical(value:string, origin:string, pattern:RegExp, keepPage=false):string {
@@ -25,7 +25,7 @@ export function parseChart(source:'rym'|'aoty',html:string,pageUrl:string):Chart
  for(const el of rows.slice(0,60)){
   const row=$(el);
   try{
-   let artist='',title='',href='',released='',scoreText='',votesDisplay='',format:Album['format']='Unknown';
+   let artist='',title='',href='',released='',scoreText='',votesDisplay='',format:Album['format']='Unknown',coverUrl:string|undefined;
    if(source==='rym'){
     const link=row.find('.page_charts_section_charts_item_title a, .page_charts_section_charts_item_link').first();
     title=localeText(link);
@@ -35,6 +35,8 @@ export function parseChart(source:'rym'|'aoty',html:string,pageUrl:string):Chart
     href=link.attr('href')??'';released=clean(row.find('.page_charts_section_charts_item_title_date_compact span').first().text());
     scoreText=row.find('.page_charts_section_charts_item_details_average_num').first().text().trim();
     votesDisplay=clean(row.find('.page_charts_section_charts_item_details_ratings').first().text()).replace(/^\/\s*/,'');
+    const coverEl=row.find('.page_charts_section_charts_item_image img, img').first();
+    coverUrl=cleanImageUrl(coverEl.attr('data-src')||coverEl.attr('data-srcset')||coverEl.attr('src'));
     format='LP';
    }else{
     const link=row.find('.albumListTitle a').first();const identity=clean(link.text());
@@ -43,6 +45,8 @@ export function parseChart(source:'rym'|'aoty',html:string,pageUrl:string):Chart
     released=clean(row.find('.albumListDate').text());
     const user=row.find('.albumListScoreContainer').filter((_,n)=>clean($(n).find('.scoreHeader').text()).toUpperCase()==='USER SCORE').first();
     scoreText=user.find('.scoreValue').text().trim();votesDisplay=clean(user.find('.scoreText').text()).replace(/\s+ratings?$/i,'');
+    const coverEl=row.find('.albumListCover img, img').first();
+    coverUrl=cleanImageUrl(coverEl.attr('data-src')||coverEl.attr('src')||coverEl.attr('srcset'));
     format=new URL(page).pathname.includes('/lp/')?'LP':'Unknown';
    }
    if(!href||!artist||!title||artist.length>500||title.length>500||!scoreText)throw new Error('缺少专辑身份或用户评分');
@@ -50,7 +54,7 @@ export function parseChart(source:'rym'|'aoty',html:string,pageUrl:string):Chart
    if(!Number.isFinite(score)||score<0||score>scale)throw new Error('评分范围无效');
    const url=canonical(href,origin,source==='rym'?/^\/release\/album\/[^/]+\/[^/]+\/?$/:/^\/album\/\d+[^/]*\.php$/);
    const votes=parseVotes(votesDisplay),votesApproximate=/\d\s*[km]\b/i.test(votesDisplay);
-   records.set(url,{id:albumId(artist,title),artist,title,releaseDate:parseReleaseDate(released),format,genres:[],excluded:false,sources:[{source,url,score,scale,votes,votesDisplay,votesApproximate,observedAt,status:'ok',collectionMethod:'browser-capture',sourcePageUrl:page}]});
+   records.set(url,{id:albumId(artist,title),artist,title,releaseDate:parseReleaseDate(released),format,...(coverUrl?{coverUrl}:{}),genres:[],excluded:false,sources:[{source,url,score,scale,votes,votesDisplay,votesApproximate,observedAt,status:'ok',collectionMethod:'browser-capture',sourcePageUrl:page}]});
   }catch{warnings.push('一个条目无法可靠识别，已跳过；可打开专辑页核对身份与格式');}
  }
  if(!records.size)throw new CaptureError('未找到可收录的用户评分榜单。请打开 RYM 专辑榜或 AOTY 用户评分榜后重试');

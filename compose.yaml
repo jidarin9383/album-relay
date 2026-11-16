@@ -5,20 +5,8 @@ services:
       - "3210:3210"
     environment:
       ALBUM_RELAY_DATA_DIR: /data
-      BROWSER_CDP_URL: http://browser:9223
-      BROWSER_UI_URL: http://browser:7900
     volumes:
       - album-data:/data
     restart: unless-stopped
-    depends_on:
-      - browser
-  browser:
-    build:
-      context: .
-      dockerfile: browser/Dockerfile
-    volumes:
-      - browser-data:/browser-data
-    restart: unless-stopped
 volumes:
   album-data:
-  browser-data:

@@ -12,9 +12,12 @@ export class Store {
  releaseLock(owner:string):void{this.db.prepare('DELETE FROM job_lock WHERE id=1 AND owner=?').run(owner)}
  getValue(key:string):string|null{const row=this.db.prepare('SELECT value FROM config WHERE key=?').get(key) as {value:string}|undefined;return row?.value??null}
  setValue(key:string,value:string):void{this.db.prepare('INSERT INTO config(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,value)}
+ deleteValue(key:string):void{this.db.prepare('DELETE FROM config WHERE key=?').run(key)}
  private list<T>(key:string):T[]{const value=this.getValue(key);return value?JSON.parse(value) as T[]:[]}
  albums():Album[]{return this.list<Album>('albums')}
  captures():CaptureReceipt[]{this.captureTable();return (this.db.prepare('SELECT payload FROM captures ORDER BY rowid DESC LIMIT 100').all() as {payload:string}[]).map(r=>JSON.parse(r.payload) as CaptureReceipt)}
+ covers():Record<string,string>{const raw=this.getValue('covers');if(!raw)return {};try{return JSON.parse(raw) as Record<string,string>;}catch{return {};}}
+ saveCover(albumId:string,url:string):void{const all=this.covers();all[albumId]=url;this.setValue('covers',JSON.stringify(all));}
  getCapture(id:string):CaptureReceipt|null{this.captureTable();const row=this.db.prepare('SELECT payload FROM captures WHERE id=?').get(id) as {payload:string}|undefined;return row?JSON.parse(row.payload) as CaptureReceipt:null}
  saveCapture(receipt:CaptureReceipt):void{this.captureTable();this.db.prepare('INSERT INTO captures(id,payload) VALUES(?,?)').run(receipt.id,JSON.stringify(receipt))}
  updateCapture(receipt:CaptureReceipt):void{this.captureTable();this.db.prepare('UPDATE captures SET payload=? WHERE id=?').run(JSON.stringify(receipt),receipt.id)}

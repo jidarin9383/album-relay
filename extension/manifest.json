@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Album Relay Capture",
+  "version": "0.1.0",
+  "description": "Sends RYM, AOTY and Pitchfork album pages you open in Chrome to your own Album Relay library.",
+  "minimum_chrome_version": "116",
+  "permissions": ["storage", "alarms"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://rateyourmusic.com/charts/*",
+        "https://rateyourmusic.com/release/*",
+        "https://www.albumoftheyear.org/ratings/*",
+        "https://www.albumoftheyear.org/album/*",
+        "https://pitchfork.com/reviews/albums/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": { "default_title": "Album Relay" },
+  "options_ui": { "page": "options.html", "open_in_tab": true }
+}

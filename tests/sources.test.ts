@@ -15,9 +15,15 @@ describe('source extraction (sanitized structural fixtures)', () => {
  expect(a).toMatchObject({artist:'Stars',title:'Moon',releaseDate:'2026-09-04',format:'LP'}); expect(a?.sources[0]).toMatchObject({score:3.75,votes:1200,votesDisplay:'1.2k'}); expect(parseVotes('12,345 ratings')).toBe(12345);
  });
  it('reads editorial state and never treats review publication date as release date', () => {
- const state={transformed:{review:{headerProps:{artists:[{name:'Artist'}],title:'Album',musicRating:{rating:8.4,bestNewMusic:true,bestNewReissue:false}},datePublished:'2026-11-13'}}};
+ const state={transformed:{review:{headerProps:{artists:[{name:'Artist'}],title:'Album',publishDate:'November 14, 2026',musicRating:{rating:8.4,bestNewMusic:true,bestNewReissue:false},infoSliceFields:{genre:'Electronic, Ambient',releaseYear:'2026'},lede:{sources:{sm:{url:'https://media.pitchfork.com/photos/cover-1.jpg'}}}},datePublished:'2026-11-13'}}};
  const a=parsePitchfork(`<script>window.__PRELOADED_STATE__ = ${JSON.stringify(state)};</script>`, 'https://pitchfork.com/reviews/albums/artist-album/');
- expect(a).toMatchObject({artist:'Artist',title:'Album',releaseDate:'',format:'Unknown'}); expect(a?.sources[0]).toMatchObject({score:8.4,bestNewMusic:true});
+ expect(a).toMatchObject({artist:'Artist',title:'Album',releaseDate:'',format:'Unknown',genres:['Electronic','Ambient'],coverUrl:'https://media.pitchfork.com/photos/cover-1.jpg'}); expect(a?.sources[0]).toMatchObject({score:8.4,bestNewMusic:true});
+ });
+ it('extracts EP suffix and archival Pitchfork releaseYear while keeping current-year dates open for corroboration', () => {
+  const archival={transformed:{review:{headerProps:{artists:[{name:'Pearl Jam'}],title:'Yield',publishDate:'November 15, 2026',musicRating:{rating:8.5,bestNewMusic:false,bestNewReissue:false},infoSliceFields:{genre:'Rock',releaseYear:'1998'}}}}};
+  const ep={transformed:{review:{headerProps:{artists:[{name:'Sun Araw'}],title:'Rapid Response EP',publishDate:'November 15, 2026',musicRating:{rating:7.5,bestNewMusic:false,bestNewReissue:false},infoSliceFields:{genre:'Experimental',releaseYear:'2026'}}}}};
+  expect(parsePitchfork(`<script>window.__PRELOADED_STATE__=${JSON.stringify(archival)};</script>`,'https://pitchfork.com/reviews/albums/pearl-jam-yield/')).toMatchObject({releaseDate:'1998-01-01',format:'Unknown',genres:['Rock']});
+  expect(parsePitchfork(`<script>window.__PRELOADED_STATE__=${JSON.stringify(ep)};</script>`,'https://pitchfork.com/reviews/albums/sun-araw-rapid-response-ep/')).toMatchObject({releaseDate:'',format:'EP',genres:['Experimental']});
  });
  it('excludes best new reissues from BNM',()=>{const a=parsePitchfork('<script>window.__PRELOADED_STATE__={"transformed":{"review":{"headerProps":{"artists":[{"name":"A"}],"title":"B","musicRating":{"rating":9,"bestNewMusic":true,"bestNewReissue":true}}}}};</script>','https://pitchfork.com/reviews/albums/a-b/');expect(a?.format).toBe('Reissue');expect(a?.sources[0]?.bestNewMusic).toBe(false);});
  it('extracts bounded source-specific links and detects challenges',()=>{expect(parseIndex('<a href="/album/1-test.php">A</a><a href="/album/1-test.php">A</a><a href="https://evil.test/album/2.php">B</a>','aoty')).toEqual(['https://www.albumoftheyear.org/album/1-test.php']);expect(isChallenge('Just a moment... Checking your browser',200)).toBe(true);expect(isChallenge('normal',403)).toBe(true);});
@@ -35,10 +41,10 @@ it('stops a blocked site chain, preserving previous observation dates and values
  const dir=await mkdtemp(join(tmpdir(),'album-sources-'));const fetchMock=vi.fn().mockResolvedValue(new Response('Verification required',{status:403}));vi.stubGlobal('fetch',fetchMock);
  const settings={sources:{aoty:true,rym:false,pitchfork:false},lookbackDays:90,requestDelayMs:0} as Settings;
  const old:Album={id:'old',artist:'A',title:'B',releaseDate:'2026-10-01',format:'LP',genres:[],excluded:false,sources:[{source:'aoty',score:81,scale:100,votes:200,url:'https://www.albumoftheyear.org/album/1.php',observedAt:'2026-10-01T00:00:00Z',status:'ok'}]};
- const service=new SourceService(dir);
+ const service=new SourceService(dir,{serverFetch:['aoty','rym','pitchfork']});
  try{const updates=vi.fn();const result=await service.refresh(settings,[old],()=>{},updates);expect(updates).toHaveBeenCalledWith(expect.objectContaining({source:'aoty',status:'blocked'}));expect(fetchMock).toHaveBeenCalledTimes(1);expect(result.statuses.find(s=>s.source==='aoty')?.status).toBe('blocked');expect(result.albums[0]?.sources[0]).toMatchObject({score:81,status:'blocked',observedAt:'2026-10-01T00:00:00Z'});expect(old.sources[0]?.status).toBe('ok');}finally{vi.unstubAllGlobals();await service.close();await rm(dir,{recursive:true,force:true});}
 });
-it('marks a source incomplete when a cross-check request fails after discovery',async()=>{const dir=await mkdtemp(join(tmpdir(),'source-error-'));const mock=vi.fn().mockResolvedValueOnce(new Response('<a href="/album/1-test.php">A</a>')).mockResolvedValueOnce(new Response('')).mockResolvedValueOnce(new Response('<div class="artist">Other</div><div class="albumTitle">Record</div><div class="albumUserScore">85</div><div class="userScoreBox">200 ratings</div><div class="detailRow">October 30, 2026 / release date</div><div class="detailRow">LP / format</div>')).mockRejectedValue(new Error('network'));vi.stubGlobal('fetch',mock);const settings={sources:{aoty:true,rym:false,pitchfork:false},lookbackDays:90,requestDelayMs:0} as Settings;const candidate:Album={id:'candidate',artist:'A',title:'B',releaseDate:new Date().toISOString().slice(0,10),format:'LP',genres:[],excluded:false,sources:[]};const service=new SourceService(dir);try{const result=await service.refresh(settings,[candidate],()=>{});expect(result.statuses.find(s=>s.source==='aoty')?.status).toBe('error');}finally{vi.unstubAllGlobals();await service.close();await rm(dir,{recursive:true,force:true});}});
+it('marks a source incomplete when a cross-check request fails after discovery',async()=>{const dir=await mkdtemp(join(tmpdir(),'source-error-'));const mock=vi.fn().mockResolvedValueOnce(new Response('<a href="/album/1-test.php">A</a>')).mockResolvedValueOnce(new Response('')).mockResolvedValueOnce(new Response('<div class="artist">Other</div><div class="albumTitle">Record</div><div class="albumUserScore">85</div><div class="userScoreBox">200 ratings</div><div class="detailRow">October 30, 2026 / release date</div><div class="detailRow">LP / format</div>')).mockRejectedValue(new Error('network'));vi.stubGlobal('fetch',mock);const settings={sources:{aoty:true,rym:false,pitchfork:false},lookbackDays:90,requestDelayMs:0} as Settings;const candidate:Album={id:'candidate',artist:'A',title:'B',releaseDate:new Date().toISOString().slice(0,10),format:'LP',genres:[],excluded:false,sources:[]};const service=new SourceService(dir,{serverFetch:['aoty','rym','pitchfork']});try{const result=await service.refresh(settings,[candidate],()=>{});expect(result.statuses.find(s=>s.source==='aoty')?.status).toBe('error');}finally{vi.unstubAllGlobals();await service.close();await rm(dir,{recursive:true,force:true});}});
 it('preserves fresh browser-capture observations when background refresh is blocked',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'source-capture-preserve-'));
  const fetchMock=vi.fn().mockResolvedValue(new Response('Verification required',{status:403}));
@@ -46,10 +52,25 @@ it('preserves fresh browser-capture observations when background refresh is bloc
  const settings={sources:{aoty:true,rym:false,pitchfork:false},lookbackDays:90,requestDelayMs:0} as Settings;
  const recentCapture=new Date(Date.now()-2*86400000).toISOString();
  const captured:Album={id:'cap',artist:'Stars',title:'Moon',releaseDate:new Date(Date.now()-20*86400000).toISOString().slice(0,10),format:'LP',genres:[],excluded:false,sources:[{source:'aoty',score:85,scale:100,votes:4942,url:'https://www.albumoftheyear.org/album/1-stars-moon.php',observedAt:recentCapture,status:'ok',collectionMethod:'browser-capture'}]};
- const service=new SourceService(dir);
+ const service=new SourceService(dir,{serverFetch:['aoty','rym','pitchfork']});
  try{
   const result=await service.refresh(settings,[captured],()=>{});
   expect(result.statuses.find(s=>s.source==='aoty')?.status).toBe('blocked');
   expect(result.albums[0]?.sources[0]).toMatchObject({score:85,status:'ok',collectionMethod:'browser-capture',observedAt:recentCapture});
  }finally{vi.unstubAllGlobals();await service.close();await rm(dir,{recursive:true,force:true});}
+});
+it('never fetches RYM or AOTY from the server by default; they are extension-only',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'source-extension-only-'));const fetchMock=vi.fn();vi.stubGlobal('fetch',fetchMock);
+ const settings={sources:{aoty:true,rym:true,pitchfork:false},lookbackDays:90,requestDelayMs:0} as Settings;
+ const captured:Album={id:'cap',artist:'Stars',title:'Moon',releaseDate:new Date(Date.now()-20*86400000).toISOString().slice(0,10),format:'LP',genres:[],excluded:false,sources:[{source:'rym',score:3.9,scale:5,votes:6000,url:'https://rateyourmusic.com/release/album/stars/moon/',observedAt:new Date().toISOString(),status:'ok',collectionMethod:'browser-capture'}]};
+ const service=new SourceService(dir);
+ try{
+  const result=await service.refresh(settings,[captured],()=>{});
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(result.statuses.map(s=>s.source).sort()).toEqual(['aoty','pitchfork','rym']);
+  expect(result.statuses.find(s=>s.source==='rym')?.message).toContain('浏览器扩展');
+  expect(result.albums[0]?.sources).toEqual(captured.sources);
+  expect((await service.check('aoty',settings)).message).toContain('浏览器扩展');
+  expect(fetchMock).not.toHaveBeenCalled();
+ }finally{vi.unstubAllGlobals();await rm(dir,{recursive:true,force:true});}
 });

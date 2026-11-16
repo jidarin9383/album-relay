@@ -1,23 +1,27 @@
 # Assisted chart and release capture
 
-Album Relay can save ratings from an already-open RYM, AOTY, or Pitchfork page into its private album library. It supports annual RYM/AOTY chart pages, single RYM/AOTY album pages, Pitchfork album review pages, and name-based browser search. It uses the existing service-owned browser; it does not require Codex, a browser extension, paid scraping APIs or manual score entry.
+Album Relay saves ratings from an already-open RYM, AOTY, or Pitchfork page into its private album library through the paired Chrome extension (`extension/`). It supports annual RYM/AOTY chart pages, single RYM/AOTY album pages, individual Pitchfork album review pages, and name-based browser search links without paid scraping APIs or manual score entry.
 
 ## Use
 
-1. Run the application locally (`BROWSER_HEADLESS=false npm start`) or run the application and browser sidecar with Docker Compose. Sign into the application's administrator page.
-2. Open **Connections and sources**. In the capture panel, either click **Open page** (`打开页面`) on RYM, AOTY or Pitchfork, or enter an artist/album name in the search field and click **Search RYM / Search AOTY / Search Pitchfork**.
-3. Follow **Enter private browser** (or switch to the opened local browser window) and wait for the page to load. Complete a human challenge yourself if requested. If you used search, click through to the specific album release or Pitchfork album review page in that same tab.
-4. Return to Album Relay and click **Capture current page** (`收录当前页面`) for that source. Chart captures read at most 60 rows from the current chart without crawling links; detail captures read the single open release or review page.
-5. Repeat for other sources. If a captured record differs slightly in release date or edition from an existing album, review it under **待确认合并** and click **Confirm merge** (`确认合并`) only after confirming both refer to the same release.
-6. Review the album library (filterable by decision, source, and listening status), then click **Library preview (`资料库预览`)** to match qualifying saved albums to NetEase Cloud Music without re-scraping rating sites. Review matched tracks and warnings, then click **Sync playlist (`同步歌单`)** once NetEase is connected.
+1. Install and pair the Chrome extension (`extension/README.md`), then open **Connections and sources** in Album Relay.
+2. Open a supported page in your everyday Chrome. You can use the **Open this year's chart** / **Search RYM / AOTY / Pitchfork** links in the capture panel; they open new tabs. Supported pages are RYM album charts and release pages, AOTY user-score charts and album pages, and single Pitchfork reviews. Complete any human check yourself.
+3. Once the page has loaded, the extension submits it. The toolbar badge shows `✓` (captured, or already captured within 30 minutes), `!` (verification needed) or `✗` (failed). Chart captures read at most 60 rows from the open page without following links.
+4. If a captured record differs slightly in release date or edition from an existing album, review it under **Capture history** and click **Confirm merge** (`确认合并`) only after confirming both refer to the same release.
+5. Optionally enable **daily refresh** in the Browser extension card. Chrome then opens the configured pages (at most 6) once per day after the chosen hour, in background tabs 30–75 s apart, and stops at the first challenge.
+6. Optionally click **Update Pitchfork (`更新 Pitchfork`)** in the top bar to refresh Pitchfork reviews from the server, review the library (or manually confirm unknown release formats when needed), click **Generate playlist preview (`生成歌单预览`)** to match qualifying saved albums to NetEase without re-scraping charts, and then click **Sync playlist (`同步歌单`)**.
 
-The initial links open the current annual RYM album chart, AOTY LP user-score chart, and Pitchfork album review index (open an individual review article before capturing Pitchfork). Non-LP-filtered AOTY charts leave format as `Unknown` until a single AOTY album page or corroborating RYM record supplies `LP`. Annual charts are discovery inputs; the configured release-date window still applies.
+The server never requests RYM or AOTY. The earlier Playwright service browser and Docker browser sidecar were removed because Cloudflare Turnstile rejects automation-controlled browsers.
 
 ## Evidence and rules
 
 Each observation retains its canonical album link, chart link, capture time, score scale, displayed vote count and precision flag. Safe AOTY page numbers are preserved; challenge and tracking parameters are discarded. HTML, browser cookies and full reviews are not saved in capture history.
 
-Counts such as `6k` are approximate. **Allow approximate vote counts** defaults to off. With the option off, an approximate count cannot satisfy a nonzero minimum-vote rule. Enable it explicitly if estimates are acceptable; the library continues to mark them as approximate. The minimum number of qualifying sources is configurable from one to three, with two as the default.
+Abbreviated counts such as `6k` are evaluated using their mathematical rounding lower bound (for example, `6k` guarantees at least 5,500 ratings, so it automatically satisfies a 100-rating minimum). **Allow approximate vote counts** defaults to off and is only needed when a configured minimum-vote threshold falls inside the rounding uncertainty interval (such as requiring 5,800 votes when only `6k` is shown).
+
+Pitchfork editorial reviews do not carry a full studio release date or `LP` label on recent releases; single-source Pitchfork reviews remain in **pending** (`待观察`, awaiting RYM/AOTY corroboration) rather than triggering a format error, while explicit `EP` / `Reissue` releases are excluded as non-LP and archival `releaseYear` metadata outside the lookback window is marked `out_of_window`. You can also manually confirm a record's format in the library.
+
+For albums whose upstream CDN blocks cross-origin hotlinking (or whose capture row lacked an image), `GET /api/albums/:id/cover` lazily resolves and caches a directly loadable cover URL from public catalog metadata (iTunes/Deezer) separately from album decision state so active sync previews are never invalidated.
 
 Matching requires normalized artist/title and agreeing, nonempty release dates. Known release formats must agree. A different album link on a previously recorded source is held for review. Ambiguous records are retained in capture history without replacing the existing library observation. Exclusions and historical admissions are preserved.
 
@@ -25,11 +29,11 @@ Capture history is stored in SQLite alongside the library. The UI lists the late
 
 ## Current limits
 
-- Capture is user initiated and covers the loaded page, not an exhaustive feed or guaranteed automatic discovery.
-- Source availability checks and background refresh are separate. A successful capture does not declare all source pages accessible.
-- **Library preview (`资料库预览`)** evaluates saved library evidence (within a 7-day capture freshness window) without background source scraping, whereas **Generate preview (`生成预览`)** and scheduled runs still perform bounded source refreshes while preserving fresh (< 7 days) `browser-capture` observations if a site blocks automated requests.
-- Pitchfork index and search pages do not contain review scores; open an individual Pitchfork album review page before capturing.
-- Live testing on 2026-11-16 showed that Playwright-managed browser windows (`--enable-automation`, software WebGL, active CDP pipe) can enter an infinite Cloudflare Turnstile verification loop even when clicked by a human, and copying `cf_clearance` cookies into server HTTP requests fails due to TLS fingerprint and IP binding. An everyday-browser HTML import or lightweight extension transport is needed when sites enforce Turnstile attestation.
+- Passive capture covers pages you open; scheduled refresh covers at most 6 configured pages per day. Neither is an exhaustive feed.
+- Scheduled refresh needs the Mac and Chrome running. A day missed while Chrome was closed runs once after Chrome reopens past the configured hour.
+- **Update Pitchfork (`更新 Pitchfork`)** (`refresh`) fetches only Pitchfork from the server; RYM/AOTY evidence comes from extension captures and ages out after 7 days unless captured again. **Generate playlist preview (`生成歌单预览`)** (`library_preview`) evaluates saved library evidence and matches qualifying albums to NetEase without re-scraping sources.
+- Pitchfork index and search pages do not contain review scores; open an individual Pitchfork album review page.
+- Playwright-managed browsers loop on Cloudflare Turnstile, and replaying `cf_clearance` cookies from the server fails TLS/IP binding; RYM/AOTY collection therefore requires the paired Chrome extension in your everyday browser.
 - RYM/AOTY/Pitchfork access challenges and site permissions still apply. Reading a page successfully does not establish permission to collect or redistribute its data. Keep personal captures private and review upstream terms before use.
 
 The parser is independently implemented against observed page structures. The implementation research compared the MIT-licensed [Comping](https://github.com/dbeley/comping) and [RYM Release Export](https://github.com/sichengchen/rym-release-export) projects; their extension source is not bundled into this application.

@@ -34,6 +34,10 @@ export interface SyncPreview { descriptionMaxChars?: number; month: string; play
 export interface Run { id: string; mode: RunMode; status: RunState; stage: string; message: string; startedAt: string; finishedAt?: string; logs: RunLog[]; preview?: SyncPreview }
 export interface ConnectionStatus { configured: boolean; loggedIn: boolean; message: string; checking?: boolean; qrCodeUrl?: string; loginState?: 'idle' | 'waiting' | 'authorized' | 'expired' | 'error' }
 export interface Overview { albums: number; selected: number; pending: number; disagreements: number; playlists: Playlist[]; lastRun: Run | null; nextRun: string | null; sourceStatuses: SourceStatus[]; connection: ConnectionStatus }
-export interface VerificationStatus { available: boolean; active: boolean; message: string; url?: string; source?: SourceName }
 export interface ChartCapture { source: SourceName; pageUrl: string; observedAt: string; albums: Album[]; warnings: string[]; conflicts?: Album[] }
 export interface CaptureReceipt extends ChartCapture { id: string; added: number; updated: number }
+/** Scheduled refresh performed by the user's own Chrome via the Album Relay extension. `{year}` expands to the current year. */
+export interface ExtensionRefresh { enabled: boolean; hour: number; targets: string[] }
+export interface ExtensionReport { source: SourceName; state: 'ok' | 'challenge' | 'error'; message: string; url: string; at: string }
+export interface ExtensionState { paired: boolean; lastSeen?: string; version?: string; reports: ExtensionReport[]; refresh: ExtensionRefresh }
+export type ExtensionCaptureResult = { status: 'captured'; receipt: CaptureReceipt } | { status: 'skipped'; reason: 'recent' };

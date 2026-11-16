@@ -1,89 +1,22 @@
-import { it, expect } from 'vitest';
+import { it, expect, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp } from '../server/app.js';
 import { NeteaseClient } from '../server/netease.js';
-import { SourceBrowser } from '../server/sources/browser.js';
-import { CaptureError } from '../server/sources/charts.js';
 import { SourceService } from '../server/sources/index.js';
 import { Store } from '../server/store.js';
 import { aotyChart, rymChart } from './fixtures/charts.js';
+import type { FastifyInstance } from 'fastify';
+/** Pair a fake extension and return a function that pushes a rendered page like the real one does. */
+async function extensionPush(app:FastifyInstance,cookie:string){
+ const token=(await app.inject({method:'POST',url:'/api/extension/token',headers:{cookie}})).json().token as string;
+ return (url:string,html:string)=>app.inject({method:'POST',url:'/api/ext/capture',headers:{authorization:`Bearer ${token}`,origin:'chrome-extension://test'},payload:{url,html}});
+}
 it('recovers a source action interrupted before any run was created',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'relay-capture-restart-'));const before=new Store(dir);before.acquireLock('http-action:interrupted');before.close();
  const app=await createApp({dataDir:dir,scheduler:false});const after=new Store(dir);
  try{expect(after.acquireLock('next-run')).toBe(true);}finally{after.releaseLock('next-run');after.close();await app.close();rmSync(dir,{recursive:true,force:true});}
-});
-it('captures the already-open document through an authenticated, locked API without extra navigation',async()=>{
- const dir=mkdtempSync(join(tmpdir(),'relay-capture-api-'));let reads=0;
- let html=rymChart,url='https://rateyourmusic.com/charts/top/album/2026/1/';
- let currentError:Error|null=null;
- const opened:{source?:string;targetUrl?:string}[]=[];
- const browser={connected:true,async read(){reads++;return {html,status:200}},async current(){if(currentError)throw currentError;return {html,url}},async verification(source?:string,targetUrl?:string){opened.push({source,targetUrl});return {available:true,active:true,source:source as 'rym'|'aoty'|undefined,url:'/verification/vnc.html',message:'Open browser'}},async close(){}};
- const service=new SourceService(dir,browser);
- const app=await createApp({dataDir:dir,scheduler:false,sources:service});const store=new Store(dir);
- try{
-  expect((await app.inject({method:'POST',url:'/api/sources/rym/chart'})).statusCode).toBe(401);
-  expect((await app.inject({method:'POST',url:'/api/sources/rym/capture'})).statusCode).toBe(401);
-  const setup=await app.inject({method:'POST',url:'/api/setup',payload:{password:'capture-test-password-123'}});const cookie=setup.headers['set-cookie'] as string;
-  expect((await app.inject({method:'POST',url:'/api/sources/unknown/chart',headers:{cookie}})).statusCode).toBe(400);
-  expect((await app.inject({method:'POST',url:'/api/sources/unknown/capture',headers:{cookie}})).statusCode).toBe(400);
-  expect((await app.inject({method:'POST',url:'/api/sources/rym/capture',headers:{cookie,origin:'http://evil.example'}})).statusCode).toBe(403);
-  store.acquireLock('other');
-  expect((await app.inject({method:'POST',url:'/api/sources/rym/chart',headers:{cookie}})).statusCode).toBe(409);
-  expect((await app.inject({method:'POST',url:'/api/sources/rym/capture',headers:{cookie}})).statusCode).toBe(409);
-  store.releaseLock('other');
-  const year=new Date().getUTCFullYear();
-  let res=await app.inject({method:'POST',url:'/api/sources/rym/chart',headers:{cookie}});
-  expect(res.statusCode).toBe(200);
-  res=await app.inject({method:'POST',url:'/api/sources/aoty/chart',headers:{cookie}});
-  expect(res.statusCode).toBe(200);
-  expect(opened).toEqual([
-   {source:'rym',targetUrl:`https://rateyourmusic.com/charts/top/album/${year}/1/`},
-   {source:'aoty',targetUrl:`https://www.albumoftheyear.org/ratings/user-highest-rated/lp/${year}/?p=1`}
-  ]);
-  res=await app.inject({method:'POST',url:'/api/sources/rym/capture',headers:{cookie}});
-  expect(res.statusCode).toBe(200);expect(res.json()).toMatchObject({added:1,updated:0});expect(reads).toBe(0);
-  expect((await app.inject({url:'/api/captures',headers:{cookie}})).json()).toHaveLength(1);
-  html='<h1>Verify you are human</h1>';
-  res=await app.inject({method:'POST',url:'/api/sources/rym/capture',headers:{cookie}});
-  expect(res.statusCode).toBe(400);expect(res.json().error).toContain('验证');
-  html=rymChart;url='https://example.com';
-  res=await app.inject({method:'POST',url:'/api/sources/rym/capture',headers:{cookie}});
-  expect(res.statusCode).toBe(400);expect(res.json().error).toContain('受支持的来源');
-  url='https://rateyourmusic.com/charts/top/album/2026/1/';
-  currentError=new CaptureError('页面正在切换，请等待加载完成后再收录');
-  res=await app.inject({method:'POST',url:'/api/sources/rym/capture',headers:{cookie}});
-  expect(res.statusCode).toBe(400);expect(res.json().error).toBe('页面正在切换，请等待加载完成后再收录');
-  currentError=new Error('Playwright internal crash');
-  res=await app.inject({method:'POST',url:'/api/sources/rym/capture',headers:{cookie}});
-  expect(res.statusCode).toBe(400);
-  expect(res.json().error).toBe('未收录：请确认独立浏览器打开的是对应站点的榜单或单张专辑/乐评页，已完成验证和加载，再重试。');
-  expect(store.captures()).toHaveLength(1);expect(store.albums()).toHaveLength(1);
-  expect(store.runs()).toHaveLength(0);expect(store.playlists()).toHaveLength(0);
- }finally{store.close();await app.close();rmSync(dir,{recursive:true,force:true});}
-});
-it('reports interactive browser availability accurately across local, CDP and VNC modes',async()=>{
- const dir=mkdtempSync(join(tmpdir(),'relay-browser-env-'));
- const saved={BROWSER_UI_URL:process.env.BROWSER_UI_URL,BROWSER_CDP_URL:process.env.BROWSER_CDP_URL,BROWSER_HEADLESS:process.env.BROWSER_HEADLESS};
- const restore=(key:keyof typeof saved,val:string|undefined)=>{if(val===undefined)delete process.env[key];else process.env[key]=val;};
- try{
-  const browser=new SourceBrowser(dir);
-  delete process.env.BROWSER_UI_URL;delete process.env.BROWSER_CDP_URL;process.env.BROWSER_HEADLESS='false';
-  expect(await browser.verification()).toMatchObject({available:true,url:undefined});
-  delete process.env.BROWSER_HEADLESS;process.env.BROWSER_CDP_URL='http://127.0.0.1:9222';
-  expect(await browser.verification()).toMatchObject({available:true,url:undefined});
-  process.env.BROWSER_UI_URL='http://browser:6080';
-  const vnc=await browser.verification();
-  expect(vnc.available).toBe(true);
-  expect(vnc.url?.startsWith('/verification/vnc.html')).toBe(true);
-  await browser.close();
- }finally{
-  restore('BROWSER_UI_URL',saved.BROWSER_UI_URL);
-  restore('BROWSER_CDP_URL',saved.BROWSER_CDP_URL);
-  restore('BROWSER_HEADLESS',saved.BROWSER_HEADLESS);
-  rmSync(dir,{recursive:true,force:true});
- }
 });
 it('completes capture, library_preview and sync end-to-end through HTTP without scraping sources',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'relay-library-preview-api-'));
@@ -94,9 +27,7 @@ it('completes capture, library_preview and sync end-to-end through HTTP without 
  const isoDate=release.toISOString().slice(0,10);
  const rymHtml=rymChart.replace('30 October 2026',rymDate);
  const aotyHtml=aotyChart.replace('October 30, 2026',aotyDate);
- let current={html:rymHtml,url:'https://rateyourmusic.com/charts/top/album/2026/1/'};
- let reads=0;
- const browser={connected:true,async read(){reads++;return {html:'',status:500}},async current(){return current},async verification(){return {available:true,active:true,message:'ok'}},async close(){}};
+ const fetchMock=vi.fn(async()=>new Response('',{status:500}));vi.stubGlobal('fetch',fetchMock);
  let playlistName='',playlistDesc='';
  let tracks:{id:string;originalId:number;name:string}[]=[];
  const netease=new NeteaseClient(dir,{command:async(args)=>{
@@ -111,7 +42,7 @@ it('completes capture, library_preview and sync end-to-end through HTTP without 
   if(cmd==='playlist get')return {code:200,data:{name:playlistName,describe:playlistDesc,trackCount:tracks.length}};
   throw new Error(`Unexpected command: ${cmd}`);
  }});
- const app=await createApp({dataDir:dir,scheduler:false,sources:new SourceService(dir,browser),netease});
+ const app=await createApp({dataDir:dir,scheduler:false,sources:new SourceService(dir),netease});
  const waitRun=async(id:string,cookie:string)=>{
   for(let i=0;i<50;i++){
    const res=await app.inject({url:`/api/runs/${id}`,headers:{cookie}});
@@ -124,9 +55,9 @@ it('completes capture, library_preview and sync end-to-end through HTTP without 
  try{
   const setup=await app.inject({method:'POST',url:'/api/setup',payload:{password:'library-preview-pass-123'}});
   const cookie=setup.headers['set-cookie'] as string;
-  expect((await app.inject({method:'POST',url:'/api/sources/rym/capture',headers:{cookie}})).statusCode).toBe(200);
-  current={html:aotyHtml,url:'https://www.albumoftheyear.org/ratings/user-highest-rated/lp/2026/'};
-  expect((await app.inject({method:'POST',url:'/api/sources/aoty/capture',headers:{cookie}})).statusCode).toBe(200);
+  const push=await extensionPush(app,cookie);
+  expect((await push('https://rateyourmusic.com/charts/top/album/2026/1/',rymHtml)).statusCode).toBe(200);
+  expect((await push('https://www.albumoftheyear.org/ratings/user-highest-rated/lp/2026/',aotyHtml)).statusCode).toBe(200);
   const settings=(await app.inject({url:'/api/settings',headers:{cookie}})).json();
   settings.allowApproximateVotes=true;
   expect((await app.inject({method:'PUT',url:'/api/settings',headers:{cookie},payload:settings})).statusCode).toBe(200);
@@ -136,7 +67,7 @@ it('completes capture, library_preview and sync end-to-end through HTTP without 
   expect(previewRun.status).toBe('succeeded');
   expect(previewRun.preview.albums).toHaveLength(1);
   expect(previewRun.preview.trackCount).toBe(2);
-  expect(reads).toBe(0);
+  expect(fetchMock).not.toHaveBeenCalled();
   const syncStart=await app.inject({method:'POST',url:'/api/runs',headers:{cookie},payload:{mode:'sync'}});
   expect(syncStart.statusCode).toBe(200);
   const syncRun=await waitRun(syncStart.json().id,cookie);
@@ -146,68 +77,47 @@ it('completes capture, library_preview and sync end-to-end through HTTP without 
   expect(playlists[0]).toMatchObject({id:'pl-1',originalId:5001,trackCount:2});
   expect(playlists[0].albumIds).toHaveLength(1);
  }finally{
+  vi.unstubAllGlobals();
   await app.close();
   rmSync(dir,{recursive:true,force:true});
  }
 });
-it('supports single-page RYM/AOTY/Pitchfork capture, search opening, conflict merge and listening status',async()=>{
+it('supports single-page RYM/AOTY/Pitchfork capture via the extension, conflict merge and listening status',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'relay-phase1-complete-'));
  const d1=new Date(Date.now()-20*86400000);
  const d2=new Date(Date.now()-19*86400000);
  const months=['January','February','March','April','May','June','July','August','September','October','November','December'];
  const fmtAoty=(d:Date)=>`${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
  const fmtRym=(d:Date)=>`${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
- let current={html:'',url:''};
- const searched:{source?:string;targetUrl?:string}[]=[];
- const browser={
-  connected:true,
-  async read(){return {html:'',status:500}},
-  async current(){return current},
-  async verification(source?:string,targetUrl?:string){searched.push({source,targetUrl});return {available:true,active:true,source:source as 'rym'|'aoty'|'pitchfork'|undefined,message:'ok'};},
-  async close(){}
- };
- const app=await createApp({dataDir:dir,scheduler:false,sources:new SourceService(dir,browser)});
+ const app=await createApp({dataDir:dir,scheduler:false,sources:new SourceService(dir)});
  try{
   const setup=await app.inject({method:'POST',url:'/api/setup',payload:{password:'phase1-complete-password-123'}});
   const cookie=setup.headers['set-cookie'] as string;
 
-  // Search endpoint opens canonical search URL and refuses capturing a search results page
-  const searchRes=await app.inject({method:'POST',url:'/api/sources/aoty/search',headers:{cookie},payload:{query:'Stars Moon'}});
-  expect(searchRes.statusCode).toBe(200);
-  expect(searched[0]).toEqual({source:'aoty',targetUrl:'https://www.albumoftheyear.org/search/?q=Stars%20Moon'});
-  current={html:'<div>Search results</div>',url:'https://www.albumoftheyear.org/search/?q=Stars%20Moon'};
-  const searchCap=await app.inject({method:'POST',url:'/api/sources/aoty/capture',headers:{cookie}});
-  expect(searchCap.statusCode).toBe(400);expect(searchCap.json().error).toContain('搜索结果列表');
+  const push=await extensionPush(app,cookie);
+  // Search result pages are not capturable; the user opens the album page itself.
+  const searchCap=await push('https://www.albumoftheyear.org/search/?q=Stars%20Moon','<div>Search results</div>');
+  expect(searchCap.statusCode).toBe(400);
 
   // Non-LP AOTY chart -> Unknown format, upgraded by AOTY album detail capture -> LP
-  current={html:aotyChart.replace('October 30, 2026',fmtAoty(d1)),url:'https://www.albumoftheyear.org/ratings/user-highest-rated/2026/'};
-  const nonLp=await app.inject({method:'POST',url:'/api/sources/aoty/capture',headers:{cookie}});
+  const nonLpRes=await push('https://www.albumoftheyear.org/ratings/user-highest-rated/2026/',aotyChart.replace('October 30, 2026',fmtAoty(d1)));const nonLp={statusCode:nonLpRes.statusCode,json:()=>nonLpRes.json().receipt};
   expect(nonLp.statusCode).toBe(200);
   expect((await app.inject({url:'/api/albums',headers:{cookie}})).json()[0].format).toBe('Unknown');
 
-  current={
-   html:`<div class="artist">Stars</div><div class="albumTitle">Moon</div><div class="albumUserScoreBox"><div class="albumUserScore">85</div><div class="text numReviews">Based on <strong>4,942</strong> ratings</div></div><div class="detailRow">${fmtAoty(d1)} / release date</div><div class="detailRow">LP / format</div>`,
-   url:'https://www.albumoftheyear.org/album/1-stars-moon.php'
-  };
-  const aotyDetail=await app.inject({method:'POST',url:'/api/sources/aoty/capture',headers:{cookie}});
+  const aotyDetailRes=await push('https://www.albumoftheyear.org/album/1-stars-moon.php',`<div class="artist">Stars</div><div class="albumTitle">Moon</div><div class="albumUserScoreBox"><div class="albumUserScore">85</div><div class="text numReviews">Based on <strong>4,942</strong> ratings</div></div><div class="detailRow">${fmtAoty(d1)} / release date</div><div class="detailRow">LP / format</div>`);const aotyDetail={statusCode:aotyDetailRes.statusCode,json:()=>aotyDetailRes.json().receipt};
   expect(aotyDetail.statusCode).toBe(200);expect(aotyDetail.json()).toMatchObject({added:0,updated:1});
   expect((await app.inject({url:'/api/albums',headers:{cookie}})).json()[0].format).toBe('LP');
 
   // Pitchfork single review capture (empty releaseDate corroborates existing album without date conflict)
   const pfState={transformed:{review:{headerProps:{artists:[{name:'Stars'}],title:'Moon',musicRating:{rating:8.4,bestNewMusic:true,bestNewReissue:false}}}}};
-  current={html:`<script>window.__PRELOADED_STATE__=${JSON.stringify(pfState)};</script>`,url:'https://pitchfork.com/reviews/albums/stars-moon/'};
-  const pfRes=await app.inject({method:'POST',url:'/api/sources/pitchfork/capture',headers:{cookie}});
+  const pfResRes=await push('https://pitchfork.com/reviews/albums/stars-moon/',`<script>window.__PRELOADED_STATE__=${JSON.stringify(pfState)};</script>`);const pfRes={statusCode:pfResRes.statusCode,json:()=>pfResRes.json().receipt};
   expect(pfRes.statusCode).toBe(200);expect(pfRes.json()).toMatchObject({added:0,updated:1});
   let albums=(await app.inject({url:'/api/albums',headers:{cookie}})).json();
   expect(albums[0].sources).toHaveLength(2);
   expect(albums[0].decision.status).toBe('selected');
 
   // RYM single release capture with 1-day date difference triggers conflict, then manual merge resolves it
-  current={
-   html:`<h1 class="album_title">Moon</h1><span class="album_artist"><a>Stars</a></span><span itemprop="ratingValue">3.9</span><span itemprop="ratingCount">6k</span><table><tr><th>Released</th><td>${fmtRym(d2)}</td></tr><tr><th>Type</th><td>Album</td></tr></table>`,
-   url:'https://rateyourmusic.com/release/album/stars/moon/'
-  };
-  const rymConflict=await app.inject({method:'POST',url:'/api/sources/rym/capture',headers:{cookie}});
+  const rymConflictRes=await push('https://rateyourmusic.com/release/album/stars/moon/',`<h1 class="album_title">Moon</h1><span class="album_artist"><a>Stars</a></span><span itemprop="ratingValue">3.9</span><span itemprop="ratingCount">6k</span><table><tr><th>Released</th><td>${fmtRym(d2)}</td></tr><tr><th>Type</th><td>Album</td></tr></table>`);const rymConflict={statusCode:rymConflictRes.statusCode,json:()=>rymConflictRes.json().receipt};
   expect(rymConflict.statusCode).toBe(200);
   const receipt=rymConflict.json();
   expect(receipt.updated).toBe(0);expect(receipt.conflicts).toHaveLength(1);
