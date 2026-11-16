@@ -158,7 +158,7 @@ export async function createApp(options:{dataDir:string;scheduler?:boolean;sourc
   const parsed=refreshSchema.safeParse(req.body);
   if(!parsed.success)return reply.code(400).send({error:`定时刷新设置无效：时间为 0–23 点，最多 ${MAX_REFRESH_TARGETS} 个页面`});
   const invalid=parsed.data.targets.find(t=>capturableSource(resolveTarget(t))===null);
-  if(invalid)return reply.code(400).send({error:`不支持的页面：${invalid}。仅支持 RYM/AOTY 榜单、单张专辑页和 Pitchfork 单篇乐评`});
+  if(invalid)return reply.code(400).send({error:`不支持的页面：${invalid}。仅支持 RYM/AOTY 榜单与专辑页，以及 Pitchfork 乐评列表或单篇乐评`});
   extension.saveRefresh(parsed.data);return extension.state();
  });
  // Extension side (bearer token, see onRequest hook).

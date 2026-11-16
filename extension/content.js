@@ -4,7 +4,7 @@
   const PAGES = {
     'https://rateyourmusic.com': [/^\/charts\/(top|popular|esoteric)\/album\//, /^\/release\/(?:album|ep|comp|single|mixtape|unauth|video|djmix|additional)\/[^/]+\/[^/]+\/?$/],
     'https://www.albumoftheyear.org': [/^\/ratings\/user-highest-rated\//, /^\/album\/\d+[^/]*\.php$/],
-    'https://pitchfork.com': [/^\/reviews\/albums\/[^/]+\/?$/]
+    'https://pitchfork.com': [/^\/reviews\/(?:best\/)?albums\/?$/, /^\/reviews\/albums\/[^/]+\/?$/]
   };
   if (!(PAGES[location.origin] || []).some((p) => p.test(location.pathname))) return;
 

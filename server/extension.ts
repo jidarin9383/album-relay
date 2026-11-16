@@ -16,7 +16,8 @@ export const DEFAULT_REFRESH:ExtensionRefresh={
  hour:10,
  targets:[
   `${origins.rym}/charts/top/album/{year}/1/`,
-  `${origins.aoty}/ratings/user-highest-rated/lp/{year}/`
+  `${origins.aoty}/ratings/user-highest-rated/lp/{year}/`,
+  `${origins.pitchfork}/reviews/albums/`
  ]
 };
 
@@ -26,7 +27,7 @@ const digest=(token:string)=>createHash('sha256').update(token).digest();
 const capturable:Record<SourceName,RegExp[]>={
  rym:[/^\/charts\/(top|popular|esoteric)\/album\//,/^\/release\/(?:album|ep|comp|single|mixtape|unauth|video|djmix|additional)\/[^/]+\/[^/]+\/?$/],
  aoty:[/^\/ratings\/user-highest-rated\//,/^\/album\/\d+[^/]*\.php$/],
- pitchfork:[/^\/reviews\/albums\/[^/]+\/?$/]
+ pitchfork:[/^\/reviews\/(?:best\/)?albums\/?$/,/^\/reviews\/albums\/[^/]+\/?$/]
 };
 export function capturableSource(value:string):SourceName|null{
  let url:URL;try{url=new URL(value);}catch{return null;}

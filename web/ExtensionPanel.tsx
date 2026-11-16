@@ -22,7 +22,7 @@ export function ExtensionPanel({request,onChanged}:Props){
  const challenges=state?.reports.filter(r=>r.state==='challenge')??[];
  return <section className="capture-panel panel" aria-labelledby="extension-heading">
   <div className="section-heading"><div><span className="eyebrow">YOUR OWN BROWSER</span><h2 id="extension-heading">浏览器扩展</h2></div><span className={`pill ${online?'green':''}`}>{!state?'…':!state.paired?'未配对':online?'在线':'离线'}</span></div>
-  <p className="capture-lead">在你平时用的 Chrome 里打开 RYM / AOTY 榜单、专辑页或 Pitchfork 乐评，扩展会自动把页面送进资料库，不用再点「收录」。遇到站点验证时由你亲自完成，扩展不会代点。</p>
+  <p className="capture-lead">在你平时用的 Chrome 里打开 RYM / AOTY 榜单与专辑页，或 Pitchfork 乐评列表与单篇乐评，扩展会自动把页面送进资料库，不用再点「收录」。遇到站点验证时由你亲自完成，扩展不会代点。</p>
   {challenges.map(r=><div className="inline-note" role="alert" key={r.source}><strong>{label[r.source]} 需要验证：</strong>请在 Chrome 中打开 <a href={r.url} target="_blank" rel="noreferrer">这个页面</a> 手动完成一次，之后会自动继续。（{time(r.at)}）</div>)}
   {state?.paired&&<dl className="extension-facts"><dt>最后在线</dt><dd>{time(state.lastSeen)}{state.version?` · v${state.version}`:''}</dd>{state.reports.map(r=><Fragment key={r.source}><dt>{label[r.source]}</dt><dd>{stateLabel[r.state]} · {r.message} · {time(r.at)}</dd></Fragment>)}</dl>}
   <div className="extension-pairing">
@@ -42,7 +42,7 @@ export function ExtensionPanel({request,onChanged}:Props){
    <label className="check-label schedule-check"><input type="checkbox" checked={draft.enabled} onChange={e=>setDraft({...draft,enabled:e.target.checked})}/><strong>每天自动刷新榜单</strong><span className="muted">由你的 Chrome 在后台标签页打开下列页面，每页间隔 30–75 秒；遇到验证立即停下等你处理。</span></label>
    <div className="field-grid two">
     <label className="field"><span>每天几点之后</span><input type="number" min={0} max={23} required value={draft.hour} onChange={e=>setDraft({...draft,hour:Number(e.target.value)})}/><small>按这台 Mac 的本地时间；Chrome 需开着。</small></label>
-    <label className="field"><span>刷新页面（每行一个，最多 6 个）</span><textarea rows={4} value={draft.targets} onChange={e=>setDraft({...draft,targets:e.target.value})}/><small>{'{year}'} 会自动替换为当年。仅支持 RYM/AOTY 榜单、专辑页和 Pitchfork 单篇乐评。</small></label>
+    <label className="field"><span>刷新页面（每行一个，最多 6 个）</span><textarea rows={4} value={draft.targets} onChange={e=>setDraft({...draft,targets:e.target.value})}/><small>{'{year}'} 会自动替换为当年。支持 RYM / AOTY 榜单与专辑页、Pitchfork 乐评列表（/reviews/albums/、/reviews/best/albums/）及单篇乐评。</small></label>
    </div>
    <p className="muted">注意：AOTY 的使用条款限制自动采集。定时刷新默认关闭，开启前请自行评估。</p>
    <button className="button" disabled={!!busy}>{busy==='refresh'?<LoaderCircle size={15} className="spin"/>:<Puzzle size={15}/>}保存定时刷新</button>

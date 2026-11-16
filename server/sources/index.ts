@@ -4,8 +4,8 @@ import type { Album, Settings, SourceName, SourceStatus } from '../../shared/typ
 import { normalizeIdentity, origins, isChallenge, parseAoty, parseRym, parsePitchfork, parseIndex } from './parsers.js';
 import { SCRAPE_TTL_MS, isObservationFresh } from '../policy.js';
 const names:SourceName[]=['aoty','rym','pitchfork'];
-/** RYM and AOTY sit behind Cloudflare Turnstile and are captured by the paired browser extension, never fetched by the server. */
-export const SERVER_FETCH_SOURCES:SourceName[]=['pitchfork'];
+/** RYM, AOTY and Pitchfork are captured by the paired browser extension; the server does not crawl source sites. */
+export const SERVER_FETCH_SOURCES:SourceName[]=[];
 export const EXTENSION_ONLY_MESSAGE='由浏览器扩展收录：在你的 Chrome 中打开榜单或专辑页即可，服务端不直接访问该站点。';
 const parsers={aoty:parseAoty,rym:parseRym,pitchfork:parsePitchfork};
 const MAX_DETAILS=24, MAX_LOOKUPS=40, PAGES=3, TTL=SCRAPE_TTL_MS;

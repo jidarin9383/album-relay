@@ -2,7 +2,7 @@
 
 Album Relay is a self-hosted album-discovery and playlist tool. It brings together public AOTY, Rate Your Music and Pitchfork evidence, checks agreement between sources, and matches complete albums to NetEase Cloud Music. It runs without Codex or paid conversion services. Spotify and YouTube Music are planned targets, not implemented.
 
-**Status: development preview.** The UI, source adapters, scheduler, playlist planning and official NetEase CLI integration are implemented and covered by automated tests. Site challenges, interactive login, a full live cross-source run and Synology deployment still need end-to-end verification in the target environment. RYM and AOTY are captured by a paired Chrome extension in the user's own browser (verified live for chart pages, including the optional scheduled refresh). Synology deployment remains unverified. Source coverage is bounded and not exhaustive. The software does not bypass CAPTCHAs; unavailable evidence cannot qualify an album.
+**Status: development preview.** The UI, source adapters, scheduler, playlist planning and official NetEase CLI integration are implemented and covered by automated tests. Site challenges, interactive login, a full live cross-source run and Synology deployment still need end-to-end verification in the target environment. RYM, AOTY and Pitchfork are all captured by a paired Chrome extension in the user's own browser (including review index and chart pages, plus the optional scheduled refresh). Synology deployment remains unverified. Source coverage is bounded and not exhaustive. The software does not bypass CAPTCHAs; unavailable evidence cannot qualify an album.
 
 ## Requirements
 
@@ -19,7 +19,7 @@ npm run build
 npm start
 ```
 
-Open `http://localhost:3210` and create an administrator password. During development, `npm run dev` starts the backend and `npm run dev:web` starts Vite. Default data location is `./data`; set `ALBUM_RELAY_DATA_DIR` to change it. RYM and AOTY are captured through the Chrome extension in `extension/` (see below); the server never fetches them.
+Open `http://localhost:3210` and create an administrator password. During development, `npm run dev` starts the backend and `npm run dev:web` starts Vite. Default data location is `./data`; set `ALBUM_RELAY_DATA_DIR` to change it. RYM, AOTY and Pitchfork are captured through the Chrome extension in `extension/` (see below); the server does not crawl source sites.
 
 ## Docker Compose
 
@@ -38,16 +38,16 @@ RYM and AOTY are protected by Cloudflare Turnstile, which rejects automated brow
 - **Passive capture:** open a supported chart, release or review page in Chrome and it is added to the library once loaded. No button press is needed.
 - **Scheduled refresh (optional, off by default):** each day after a configured hour, Chrome opens a few configured chart pages in background tabs and captures them. It stops at the first verification challenge and leaves that tab for you. It never solves challenges.
 
-Install it from `extension/` ([instructions](extension/README.md)) and pair it under **Connections → Browser extension**. Scores, source links, capture history, listening statuses and rounded vote counts are retained, and **Generate playlist preview (`生成歌单预览`)** matches saved qualifying albums to NetEase without re-scraping charts. Pitchfork can also be refreshed from the server via **Update Pitchfork (`更新 Pitchfork`)**. See [the capture guide](docs/assisted-capture.md) and [the verification ledger](docs/verification.md).
+Install it from `extension/` ([instructions](extension/README.md)) and pair it under **Connections → Browser extension**. Scores, source links, capture history, listening statuses and rounded vote counts are retained, and **Generate playlist preview (`生成歌单预览`)** matches saved qualifying albums to NetEase without re-scraping. See [the capture guide](docs/assisted-capture.md) and [the verification ledger](docs/verification.md).
 
 ## Selection and sync
 
 Default rules: releases in the last 90 days, at least 7 days old, with at least two qualifying sources. AOTY requires 80/100 and 100 ratings, RYM 3.5/5 and 100 ratings, and Pitchfork 8/10 or Best New Music. Rounded RYM counts (such as `6k`, whose mathematical lower bound is 5,500) satisfy vote minimums automatically when their lower bound meets the rule; **Allow approximate vote counts** only loosens thresholds that fall inside the rounding uncertainty interval. A clearly low third score flags disagreement. Single-source Pitchfork reviews remain `pending` until RYM or AOTY supplies a release date and LP format (or can be confirmed manually in the library). Missing, stale, blocked or unmatched data is not a low score and is never invented.
 
-Follow the three steps in the top bar:
+Follow the workflow in Chrome + the top bar:
 
-1. **Capture / Update Pitchfork (`更新 Pitchfork`)**: open RYM / AOTY charts in Chrome (auto-captured by the extension) and optionally refresh Pitchfork from the server.
-2. **Generate playlist preview (`生成歌单预览`)**: evaluate qualifying saved albums and match complete NetEase albums without re-scraping external charts.
+1. **Browse or auto-refresh in Chrome**: open RYM / AOTY charts or Pitchfork review pages (`/reviews/albums/`, `/reviews/best/albums/`, or individual reviews) in Chrome (or enable extension daily refresh) so the extension submits them automatically.
+2. **Generate playlist preview (`生成歌单预览`)**: evaluate qualifying saved albums and match complete NetEase albums without external source requests.
 3. **Sync playlist (`同步歌单`)**: inspect the matched tracks and confirm writing to this month's NetEase playlist.
 
 Automatic sync is off by default; when enabled, the proposed default is Wednesday at 12:00 Asia/Taipei and writes only after a complete successful run. The monthly format is `高分新专辑｜YYYY-MM`. Sync preserves existing user tracks, groups new album tracks, checkpoints the playlist ID and verifies readback. Descriptions use observed evidence, not invented listening impressions, and are capped at 1,000 characters.

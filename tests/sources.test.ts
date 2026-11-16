@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseAoty, parseRym, parsePitchfork, parseIndex, parseVotes, normalizeIdentity, isChallenge } from '../server/sources/parsers.js';
+import { parseAoty, parseRym, parsePitchfork, parsePitchforkIndex, parseIndex, parseVotes, normalizeIdentity, isChallenge } from '../server/sources/parsers.js';
 describe('source extraction (sanitized structural fixtures)', () => {
  it('reads current AOTY user vote counts without borrowing critic review counts', () => {
  const a = parseAoty('<div class="artist">Example Artist</div><div class="albumTitle">Example Album</div><div class="albumCriticScoreBox"><div class="albumCriticScore">88</div><div class="text numReviews">Based on <strong>13</strong> reviews</div></div><div class="albumUserScoreBox"><div class="albumUserScore"><a title="84.6">85</a></div><div class="text numReviews">Based on <a><strong>4,942</strong>&nbsp;ratings</a></div></div>', 'https://www.albumoftheyear.org/album/1-example.php');
@@ -27,7 +27,27 @@ describe('source extraction (sanitized structural fixtures)', () => {
  });
  it('excludes best new reissues from BNM',()=>{const a=parsePitchfork('<script>window.__PRELOADED_STATE__={"transformed":{"review":{"headerProps":{"artists":[{"name":"A"}],"title":"B","musicRating":{"rating":9,"bestNewMusic":true,"bestNewReissue":true}}}}};</script>','https://pitchfork.com/reviews/albums/a-b/');expect(a?.format).toBe('Reissue');expect(a?.sources[0]?.bestNewMusic).toBe(false);});
  it('extracts bounded source-specific links and detects challenges',()=>{expect(parseIndex('<a href="/album/1-test.php">A</a><a href="/album/1-test.php">A</a><a href="https://evil.test/album/2.php">B</a>','aoty')).toEqual(['https://www.albumoftheyear.org/album/1-test.php']);expect(isChallenge('Just a moment... Checking your browser',200)).toBe(true);expect(isChallenge('normal',403)).toBe(true);});
- it('normalizes Unicode punctuation without conflating editions',()=>{expect(normalizeIdentity('Beyoncé — Moon')).toBe(normalizeIdentity('Beyonce Moon'));expect(normalizeIdentity('Moon Deluxe')).not.toBe(normalizeIdentity('Moon'));});
+ it('normalizes Unicode punctuation and slash/ampersand collaborations without conflating editions',()=>{
+  expect(normalizeIdentity('Beyoncé — Moon')).toBe(normalizeIdentity('Beyonce Moon'));
+  expect(normalizeIdentity('Aesop Rock / Blockhead')).toBe(normalizeIdentity('Aesop Rock & Blockhead'));
+  expect(normalizeIdentity('Moon Deluxe')).not.toBe(normalizeIdentity('Moon'));
+ });
+ it('parses Pitchfork review index containers with scores, covers, genres, EP and Reissue flags',()=>{
+  const state={transformed:{bundle:{containers:[{items:[
+   {contentType:'review',subHed:{name:'Aesop Rock / Blockhead'},dangerousHed:'<em>Trouble Mountain</em>',url:'/reviews/albums/aesop-rock-blockhead-trouble-mountain/',ratingValue:{score:7.1,isBestNewMusic:false,isBestNewReissue:false},rubric:[{name:'Rap'},{name:'Rap'}],image:{sources:{sm:{url:'https://media.pitchfork.com/photos/1.jpg'}}}},
+   {contentType:'review',subHed:{name:'Armand Hammer'},dangerousHed:'<em>Snakes &amp; Ladders</em>',url:'/reviews/albums/armand-hammer-snakes-and-ladders/',ratingValue:{score:8.3,isBestNewMusic:true,isBestNewReissue:false},rubric:[{name:'Rap'}]},
+   {contentType:'review',subHed:{name:'Armand Hammer'},dangerousHed:'<em>Snakes &amp; Ladders</em>',url:'/reviews/albums/armand-hammer-snakes-and-ladders/',ratingValue:{score:8.3,isBestNewMusic:true,isBestNewReissue:false}},
+   {contentType:'review',subHed:{name:'Sun Araw'},dangerousHed:'<em>Rapid Response EP</em>',url:'/reviews/albums/sun-araw-rapid-response-ep/',ratingValue:{score:7.5,isBestNewMusic:false,isBestNewReissue:false}},
+   {contentType:'review',subHed:{name:'Classic Band'},dangerousHed:'<em>Old LP</em>',url:'/reviews/albums/classic-band-old-lp/',ratingValue:{score:9.0,isBestNewMusic:true,isBestNewReissue:true}}
+  ]}]}}};
+  const parsed=parsePitchforkIndex(`<script>window.__PRELOADED_STATE__=${JSON.stringify(state)};</script>`,'https://pitchfork.com/reviews/albums/');
+  expect(parsed.albums).toHaveLength(4);
+  expect(parsed.albums[0]).toMatchObject({artist:'Aesop Rock / Blockhead',title:'Trouble Mountain',format:'Unknown',genres:['Rap'],coverUrl:'https://media.pitchfork.com/photos/1.jpg'});
+  expect(parsed.albums[1]?.sources[0]).toMatchObject({score:8.3,bestNewMusic:true,collectionMethod:'browser-capture'});
+  expect(parsed.albums[2]?.format).toBe('EP');
+  expect(parsed.albums[3]).toMatchObject({format:'Reissue'});
+  expect(parsed.albums[3]?.sources[0]?.bestNewMusic).toBe(false);
+ });
 });
 
 import { readFile, mkdtemp, rm } from 'node:fs/promises';
@@ -59,9 +79,9 @@ it('preserves fresh browser-capture observations when background refresh is bloc
   expect(result.albums[0]?.sources[0]).toMatchObject({score:85,status:'ok',collectionMethod:'browser-capture',observedAt:recentCapture});
  }finally{vi.unstubAllGlobals();await service.close();await rm(dir,{recursive:true,force:true});}
 });
-it('never fetches RYM or AOTY from the server by default; they are extension-only',async()=>{
+it('never fetches RYM, AOTY or Pitchfork from the server by default; all sources are extension-only',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'source-extension-only-'));const fetchMock=vi.fn();vi.stubGlobal('fetch',fetchMock);
- const settings={sources:{aoty:true,rym:true,pitchfork:false},lookbackDays:90,requestDelayMs:0} as Settings;
+ const settings={sources:{aoty:true,rym:true,pitchfork:true},lookbackDays:90,requestDelayMs:0} as Settings;
  const captured:Album={id:'cap',artist:'Stars',title:'Moon',releaseDate:new Date(Date.now()-20*86400000).toISOString().slice(0,10),format:'LP',genres:[],excluded:false,sources:[{source:'rym',score:3.9,scale:5,votes:6000,url:'https://rateyourmusic.com/release/album/stars/moon/',observedAt:new Date().toISOString(),status:'ok',collectionMethod:'browser-capture'}]};
  const service=new SourceService(dir);
  try{
@@ -69,8 +89,10 @@ it('never fetches RYM or AOTY from the server by default; they are extension-onl
   expect(fetchMock).not.toHaveBeenCalled();
   expect(result.statuses.map(s=>s.source).sort()).toEqual(['aoty','pitchfork','rym']);
   expect(result.statuses.find(s=>s.source==='rym')?.message).toContain('浏览器扩展');
+  expect(result.statuses.find(s=>s.source==='pitchfork')?.message).toContain('浏览器扩展');
   expect(result.albums[0]?.sources).toEqual(captured.sources);
   expect((await service.check('aoty',settings)).message).toContain('浏览器扩展');
+  expect((await service.check('pitchfork',settings)).message).toContain('浏览器扩展');
   expect(fetchMock).not.toHaveBeenCalled();
  }finally{vi.unstubAllGlobals();await rm(dir,{recursive:true,force:true});}
 });

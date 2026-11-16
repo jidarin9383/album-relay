@@ -1,21 +1,22 @@
 import { load } from 'cheerio';
 import type { Album, ChartCapture, SourceName } from '../../shared/types.js';
 import { albumId } from '../policy.js';
-import { origins, parseReleaseDate, parseVotes, isChallenge, parseAoty, parseRym, parsePitchfork, cleanImageUrl } from './parsers.js';
+import { origins, parseReleaseDate, parseVotes, isChallenge, parseAoty, parseRym, parsePitchfork, parsePitchforkIndex, cleanImageUrl } from './parsers.js';
 
 export class CaptureError extends Error {}
-function canonical(value:string, origin:string, pattern:RegExp, keepPage=false):string {
+function canonical(value:string, origin:string, pattern:RegExp, pageParam?:string):string {
  const url=new URL(value,origin);
  if(url.origin!==origin||url.username||url.password||!pattern.test(url.pathname))throw new CaptureError('页面或专辑链接不属于受支持的来源');
- const page=url.searchParams.get('p');url.search='';url.hash='';
- if(keepPage&&page&&/^[1-9]\d{0,3}$/.test(page))url.searchParams.set('p',page);
+ const page=pageParam?url.searchParams.get(pageParam):null;
+ url.search='';url.hash='';
+ if(pageParam&&page&&/^[1-9]\d{0,3}$/.test(page))url.searchParams.set(pageParam,page);
  return url.href;
 }
 const clean=(value:string)=>value.replace(/\s+/g,' ').trim();
 /** Parse only the current public chart document, never fetch linked pages. */
 export function parseChart(source:'rym'|'aoty',html:string,pageUrl:string):ChartCapture {
  const origin=origins[source];
- const page=canonical(pageUrl,origin,source==='rym'?/^\/charts\/(top|popular|esoteric)\/album\//:/^\/ratings\/user-highest-rated\//,source==='aoty');
+ const page=canonical(pageUrl,origin,source==='rym'?/^\/charts\/(top|popular|esoteric)\/album\//:/^\/ratings\/user-highest-rated\//,source==='aoty'?'p':undefined);
  const $=load(html);$('script,style,noscript').remove();
  if(isChallenge($.root().text(),200))throw new CaptureError('当前页面仍需要验证，请在独立浏览器中完成后再收录');
  const localeText=(node:ReturnType<typeof $>)=>clean(node.find('.ui_name_locale_original').first().text()||node.find('.ui_name_locale').first().text()||node.text());
@@ -90,7 +91,14 @@ export function parseCapturedPage(source:SourceName,html:string,pageUrl:string):
   album.sources[0]={...album.sources[0]!,observedAt,collectionMethod:'browser-capture',sourcePageUrl:canonicalUrl};
   return {source,pageUrl:canonicalUrl,observedAt,albums:[album],warnings:[]};
  }
- if(/^\/reviews\/albums\/?$/.test(url.pathname))throw new CaptureError('Pitchfork 列表页不含评分，请在独立浏览器点开具体专辑乐评页后再收录');
+ if(/^\/reviews\/(?:best\/)?albums\/?$/.test(url.pathname)){
+  const canonicalUrl=canonical(pageUrl,origin,/^\/reviews\/(?:best\/)?albums\/?$/,'page');
+  const $=load(html);$('script,style,noscript').remove();
+  if(isChallenge($.root().text(),200))throw new CaptureError('当前页面仍需要验证，请在独立浏览器中完成后再收录');
+  const {albums,warnings}=parsePitchforkIndex(html,canonicalUrl);
+  if(!albums.length)throw new CaptureError('当前 Pitchfork 列表页未识别到有效专辑评分，请确认页面加载完成后重试');
+  return {source,pageUrl:canonicalUrl,observedAt:albums[0]?.sources[0]?.observedAt??new Date().toISOString(),albums,warnings};
+ }
  const canonicalUrl=canonical(pageUrl,origin,/^\/reviews\/albums\/[^/]+\/?$/);
  const $=load(html);$('script,style,noscript').remove();
  if(isChallenge($.root().text(),200))throw new CaptureError('当前页面仍需要验证，请在独立浏览器中完成后再收录');

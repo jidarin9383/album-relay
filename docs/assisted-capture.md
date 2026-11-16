@@ -1,17 +1,17 @@
 # Assisted chart and release capture
 
-Album Relay saves ratings from an already-open RYM, AOTY, or Pitchfork page into its private album library through the paired Chrome extension (`extension/`). It supports annual RYM/AOTY chart pages, single RYM/AOTY album pages, individual Pitchfork album review pages, and name-based browser search links without paid scraping APIs or manual score entry.
+Album Relay saves ratings from an already-open RYM, AOTY, or Pitchfork page into its private album library through the paired Chrome extension (`extension/`). It supports annual RYM/AOTY chart pages, single RYM/AOTY album pages, Pitchfork review list pages (`/reviews/albums/`, `/reviews/best/albums/`), individual Pitchfork album review pages, and name-based browser search links without paid scraping APIs or manual score entry.
 
 ## Use
 
 1. Install and pair the Chrome extension (`extension/README.md`), then open **Connections and sources** in Album Relay.
-2. Open a supported page in your everyday Chrome. You can use the **Open this year's chart** / **Search RYM / AOTY / Pitchfork** links in the capture panel; they open new tabs. Supported pages are RYM album charts and release pages, AOTY user-score charts and album pages, and single Pitchfork reviews. Complete any human check yourself.
-3. Once the page has loaded, the extension submits it. The toolbar badge shows `✓` (captured, or already captured within 30 minutes), `!` (verification needed) or `✗` (failed). Chart captures read at most 60 rows from the open page without following links.
+2. Open a supported page in your everyday Chrome. You can use the **Open this year's chart / Latest reviews / Best New** or **Search RYM / AOTY / Pitchfork** links in the capture panel; they open new tabs. Supported pages are RYM album charts and release pages, AOTY user-score charts and album pages, and Pitchfork album review lists or single reviews. Complete any human check yourself.
+3. Once the page has loaded, the extension submits it. The toolbar badge shows `✓` (captured, or already captured within 30 minutes), `!` (verification needed) or `✗` (failed). Chart and Pitchfork review-list captures read at most 60 rows from the open page without following links.
 4. If a captured record differs slightly in release date or edition from an existing album, review it under **Capture history** and click **Confirm merge** (`确认合并`) only after confirming both refer to the same release.
-5. Optionally enable **daily refresh** in the Browser extension card. Chrome then opens the configured pages (at most 6) once per day after the chosen hour, in background tabs 30–75 s apart, and stops at the first challenge.
-6. Optionally click **Update Pitchfork (`更新 Pitchfork`)** in the top bar to refresh Pitchfork reviews from the server, review the library (or manually confirm unknown release formats when needed), click **Generate playlist preview (`生成歌单预览`)** to match qualifying saved albums to NetEase without re-scraping charts, and then click **Sync playlist (`同步歌单`)**.
+5. Optionally enable **daily refresh** in the Browser extension card. Chrome then opens the configured pages (at most 6, defaulting to this year's RYM/AOTY charts and Pitchfork `/reviews/albums/`) once per day after the chosen hour, in background tabs 30–75 s apart, and stops at the first challenge.
+6. Review the library (or manually confirm unknown release formats when needed), click **Generate playlist preview (`生成歌单预览`)** in the top bar to match qualifying saved albums to NetEase without external source scraping, and then click **Sync playlist (`同步歌单`)**.
 
-The server never requests RYM or AOTY. The earlier Playwright service browser and Docker browser sidecar were removed because Cloudflare Turnstile rejects automation-controlled browsers.
+The server never requests RYM, AOTY, or Pitchfork. The earlier Playwright service browser and Docker browser sidecar were removed because Cloudflare Turnstile rejects automation-controlled browsers.
 
 ## Evidence and rules
 
@@ -31,8 +31,8 @@ Capture history is stored in SQLite alongside the library. The UI lists the late
 
 - Passive capture covers pages you open; scheduled refresh covers at most 6 configured pages per day. Neither is an exhaustive feed.
 - Scheduled refresh needs the Mac and Chrome running. A day missed while Chrome was closed runs once after Chrome reopens past the configured hour.
-- **Update Pitchfork (`更新 Pitchfork`)** (`refresh`) fetches only Pitchfork from the server; RYM/AOTY evidence comes from extension captures and ages out after 7 days unless captured again. **Generate playlist preview (`生成歌单预览`)** (`library_preview`) evaluates saved library evidence and matches qualifying albums to NetEase without re-scraping sources.
-- Pitchfork index and search pages do not contain review scores; open an individual Pitchfork album review page.
+- **Generate playlist preview (`生成歌单预览`)** (`library_preview`) evaluates saved library evidence (within the 7-day capture freshness window) and matches qualifying albums to NetEase without any server source requests. All three sources come from extension captures.
+- Pitchfork search pages do not contain review scores; open `/reviews/albums/`, `/reviews/best/albums/`, or an individual `/reviews/albums/<slug>/` review page.
 - Playwright-managed browsers loop on Cloudflare Turnstile, and replaying `cf_clearance` cookies from the server fails TLS/IP binding; RYM/AOTY collection therefore requires the paired Chrome extension in your everyday browser.
 - RYM/AOTY/Pitchfork access challenges and site permissions still apply. Reading a page successfully does not establish permission to collect or redistribute its data. Keep personal captures private and review upstream terms before use.
 

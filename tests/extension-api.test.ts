@@ -22,7 +22,9 @@ it('accepts only supported chart, release and review pages',()=>{
  expect(capturableSource('https://www.albumoftheyear.org/ratings/user-highest-rated/lp/2026/?p=2')).toBe('aoty');
  expect(capturableSource('https://www.albumoftheyear.org/album/1-stars-moon.php')).toBe('aoty');
  expect(capturableSource('https://pitchfork.com/reviews/albums/stars-moon/')).toBe('pitchfork');
- expect(capturableSource('https://pitchfork.com/reviews/albums/')).toBeNull();
+ expect(capturableSource('https://pitchfork.com/reviews/albums/')).toBe('pitchfork');
+ expect(capturableSource('https://pitchfork.com/reviews/best/albums/')).toBe('pitchfork');
+ expect(capturableSource('https://pitchfork.com/reviews/tracks/')).toBeNull();
  expect(capturableSource('https://rateyourmusic.com/search?searchterm=x')).toBeNull();
  expect(capturableSource('https://rateyourmusic.com.evil.example/charts/top/album/2026/')).toBeNull();
  expect(capturableSource('http://rateyourmusic.com/charts/top/album/2026/')).toBeNull();
@@ -44,6 +46,7 @@ it('pairs the extension with a bearer token that is isolated from session cookie
   expect(config.statusCode).toBe(200);
   expect(config.json().refresh).toMatchObject({enabled:false,hour:10});
   expect(config.json().refresh.targets[0]).toBe(`https://rateyourmusic.com/charts/top/album/${new Date().getFullYear()}/1/`);
+  expect(config.json().refresh.targets).toContain('https://pitchfork.com/reviews/albums/');
   // The bearer token does not open administrator endpoints.
   expect((await t.app.inject({url:'/api/extension',headers:{authorization:ext.authorization}})).statusCode).toBe(401);
   const state=(await t.app.inject({url:'/api/extension',headers:{cookie:t.cookie}})).json();
@@ -105,10 +108,25 @@ it('validates scheduled refresh targets on the server',async()=>{
   expect(res.statusCode).toBe(400);
   res=await t.app.inject({method:'PUT',url:'/api/extension/refresh',headers:{cookie:t.cookie},payload:{enabled:true,hour:9,targets:Array(7).fill('https://rateyourmusic.com/charts/top/album/{year}/1/')}});
   expect(res.statusCode).toBe(400);
-  res=await t.app.inject({method:'PUT',url:'/api/extension/refresh',headers:{cookie:t.cookie},payload:{enabled:true,hour:9,targets:['https://rateyourmusic.com/charts/top/album/{year}/2/']}});
+  res=await t.app.inject({method:'PUT',url:'/api/extension/refresh',headers:{cookie:t.cookie},payload:{enabled:true,hour:9,targets:['https://rateyourmusic.com/charts/top/album/{year}/2/','https://pitchfork.com/reviews/best/albums/']}});
   expect(res.statusCode).toBe(200);
   const token=(await t.app.inject({method:'POST',url:'/api/extension/token',headers:{cookie:t.cookie}})).json().token as string;
   const config=(await t.app.inject({url:'/api/ext/config',headers:{authorization:`Bearer ${token}`}})).json();
-  expect(config).toEqual({refresh:{enabled:true,hour:9,targets:[`https://rateyourmusic.com/charts/top/album/${new Date().getFullYear()}/2/`]}});
+  expect(config).toEqual({refresh:{enabled:true,hour:9,targets:[`https://rateyourmusic.com/charts/top/album/${new Date().getFullYear()}/2/`,'https://pitchfork.com/reviews/best/albums/']}});
+ }finally{await t.done();}
+});
+it('captures Pitchfork review index pages through /api/ext/capture and updates source status',async()=>{
+ const t=await setup();
+ try{
+  const token=(await t.app.inject({method:'POST',url:'/api/extension/token',headers:{cookie:t.cookie}})).json().token as string;
+  const headers={authorization:`Bearer ${token}`,origin:'chrome-extension://abcdefghijklmnop'};
+  const pfState={transformed:{bundle:{containers:[{items:[{contentType:'review',subHed:{name:'Stars'},dangerousHed:'<em>Moon</em>',url:'/reviews/albums/stars-moon/',ratingValue:{score:8.4,isBestNewMusic:true,isBestNewReissue:false},rubric:[{name:'Indie Rock'}],image:{sources:{sm:{url:'https://media.pitchfork.com/photos/moon.jpg'}}}}]}]}}};
+  const res=await t.app.inject({method:'POST',url:'/api/ext/capture',headers,payload:{url:'https://pitchfork.com/reviews/albums/',html:`<script>window.__PRELOADED_STATE__=${JSON.stringify(pfState)};</script>`}});
+  expect(res.statusCode).toBe(200);
+  expect(res.json()).toMatchObject({status:'captured',receipt:{source:'pitchfork',added:1}});
+  const statuses=(await t.app.inject({url:'/api/sources',headers:{cookie:t.cookie}})).json() as {source:string;status:string}[];
+  expect(statuses.find(s=>s.source==='pitchfork')?.status).toBe('ok');
+  const albums=(await t.app.inject({url:'/api/albums',headers:{cookie:t.cookie}})).json();
+  expect(albums[0]).toMatchObject({artist:'Stars',title:'Moon',coverUrl:'https://media.pitchfork.com/photos/moon.jpg'});
  }finally{await t.done();}
 });

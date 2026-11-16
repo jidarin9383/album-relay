@@ -13,7 +13,7 @@
 |---|---|
 | RYM | `/charts/top|popular|esoteric/album/...` 榜单；`/release/album|ep|.../艺人/专辑/` 发行页 |
 | AOTY | `/ratings/user-highest-rated/...` 用户评分榜；`/album/<id>-....php` 专辑页 |
-| Pitchfork | `/reviews/albums/<slug>/` 单篇乐评 |
+| Pitchfork | `/reviews/albums/`、`/reviews/best/albums/` 乐评列表页；`/reviews/albums/<slug>/` 单篇乐评 |
 
 ## 安装（一次性）
 

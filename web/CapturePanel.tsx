@@ -12,7 +12,7 @@ const sourceList=['rym','aoty','pitchfork'] as const;
 const label=(source:string)=>source==='rym'?'RYM':source==='aoty'?'AOTY':'Pitchfork';
 const logo=(source:string)=>source==='pitchfork'?'Pf.':label(source);
 const names:Record<SourceName,string>={rym:'Rate Your Music',aoty:'Album of the Year',pitchfork:'Pitchfork'};
-const desc:Record<SourceName,string>={rym:'专辑榜 · 单张发行页',aoty:'LP 用户榜 · 专辑详情页',pitchfork:'乐评列表 · 打开单篇乐评后收录'};
+const desc:Record<SourceName,string>={rym:'专辑榜 · 单张发行页',aoty:'LP 用户榜 · 专辑详情页',pitchfork:'最新乐评列表 · Best New · 单篇乐评'};
 const time=(at:string)=>new Date(at).toLocaleString('zh-CN');
 // Pages open in the user's own browser; the paired extension captures them once loaded.
 const chartUrl=(source:SourceName,year=new Date().getFullYear())=>source==='rym'?`https://rateyourmusic.com/charts/top/album/${year}/1/`:source==='aoty'?`https://www.albumoftheyear.org/ratings/user-highest-rated/lp/${year}/`:'https://pitchfork.com/reviews/albums/';
@@ -39,7 +39,7 @@ export function CapturePanel({request,onCaptured,onPreviewLibrary,runBusy}:Props
   </form>
   <div className="capture-sources">{sourceList.map(source=><div className="capture-source" key={source}>
    <div><span className={`source-logo ${source}`}>{logo(source)}</span><strong>{names[source]}</strong><small>{desc[source]}</small></div>
-   <div className="capture-actions"><a className="button" href={chartUrl(source)} target="_blank" rel="noreferrer"><ExternalLink size={15}/>{source==='pitchfork'?'打开乐评列表':'打开今年榜单'}</a></div>
+   <div className="capture-actions"><a className="button" href={chartUrl(source)} target="_blank" rel="noreferrer"><ExternalLink size={15}/>{source==='pitchfork'?'打开最新乐评':'打开今年榜单'}</a>{source==='pitchfork'&&<a className="button" href="https://pitchfork.com/reviews/best/albums/" target="_blank" rel="noreferrer"><ExternalLink size={15}/>Best New</a>}</div>
   </div>)}</div>
   {error&&<p className="inline-note" role="alert">{error}</p>}
   <details className="capture-history" open={pending>0}><summary>收录历史 <span>{history.length?`最近 ${history.length} 次${pending?` · ${pending} 条待确认合并`:''}`:'暂无收录'}</span></summary>
