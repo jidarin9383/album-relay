@@ -1,0 +1,14 @@
+# Verification ledger
+
+This ledger records what has been verified against the current codebase and what still requires live site/account/NAS validation. Fixture-based checks do not substitute for live network or hardware tests.
+
+| Area | Status | Scope and evidence |
+| --- | --- | --- |
+| Core policy, planning, store & scheduler | Verified (automated) | `tests/policy.test.ts`, `tests/planner.test.ts`, `tests/store.test.ts`, `tests/scheduler.test.ts` — cross-source rules, approximate vote opt-in, month deduplication, SQLite transactions, timezone scheduling, and lock recovery. |
+| Auth, HTTP API & job locking | Verified (automated) | `tests/auth.test.ts`, `tests/app.test.ts`, `tests/capture-api.test.ts` — password setup, login rate limiting, origin checks, authenticated `/verification/` proxy, concurrent lock rejection, and restart recovery. |
+| Chart, single-page & Pitchfork capture | Verified (synthetic fixtures) | `tests/capture.test.ts`, `tests/capture-api.test.ts`, `tests/sources.test.ts` — RYM/AOTY chart parsing, localized spans, 60-row cap, 100-receipt pagination, single RYM/AOTY/Pitchfork detail capture, search routing, conflict retention, and manual conflict merge. |
+| Library-only preview & NetEase reconciliation | Verified (controlled command adapter) | `tests/runner.test.ts`, `tests/netease.test.ts`, `tests/capture-api.test.ts` — `library_preview` skips scraping, respects 7-day capture TTL, skips unmatched catalog misses, creates/adds/reorders/verifies playlists, and preserves fresh captures when background refresh is blocked. |
+| Web UI (desktop & mobile) | Verified (isolated Playwright harness) | Isolated `dist/web` Playwright checks at `1440x900` and `390x844` — onboarding, 3-source capture, name search, conflict merge, source/listening filters, rule changes, `library_preview`, `sync`, and mobile drawer/scrim toggle. |
+| Local private `SourceBrowser` launch | Verified (local macOS) | Real `SourceBrowser` launch with isolated temporary profile dir via bundled Chromium or system Chrome fallback (`channel: 'chrome'`). |
+| Live RYM/AOTY/Pitchfork interactive run + real NetEase sync | Pending live user validation | Requires live browser challenge completion in UI and an authorized NetEase developer session without mutating unintended playlists. |
+| Synology DSM / Linux container deployment | Pending target environment test | Linux image/compose layout has been built, but live Synology Container Manager persistence, VNC sidecar flow, and scheduled runs remain unverified on target NAS hardware. |

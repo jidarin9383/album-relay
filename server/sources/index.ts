@@ -4,7 +4,7 @@ import type { Album, Settings, SourceName, SourceStatus, VerificationStatus } fr
 import { normalizeIdentity, origins, isChallenge, parseAoty, parseRym, parsePitchfork, parseIndex } from './parsers.js';
 import { SCRAPE_TTL_MS, isObservationFresh } from '../policy.js';
 import { SourceBrowser, type BrowserReader } from './browser.js';
-import { parseChart } from './charts.js';
+import { parseCapturedPage } from './charts.js';
 const names:SourceName[]=['aoty','rym','pitchfork'];
 const parsers={aoty:parseAoty,rym:parseRym,pitchfork:parsePitchfork};
 const MAX_DETAILS=24, MAX_LOOKUPS=40, PAGES=3, TTL=SCRAPE_TTL_MS;
@@ -14,8 +14,9 @@ interface CacheEntry { at:number; album:Album }
 export class SourceService {
  private browser:BrowserReader;private blocked=new Set<SourceName>();private last=new Map<SourceName,number>();private cache:Record<string,CacheEntry>={};private loaded=false;
  constructor(private readonly dataDir:string,browser?:BrowserReader){this.browser=browser??new SourceBrowser(dataDir);}
- async captureCurrent(source:'rym'|'aoty') {const current=await this.browser.current();return parseChart(source,current.html,current.url);}
- async openChart(source:'rym'|'aoty'):Promise<VerificationStatus>{return this.browser.verification(source,this.indexUrl(source,new Date().getUTCFullYear(),1));}
+ async captureCurrent(source:SourceName) {const current=await this.browser.current();return parseCapturedPage(source,current.html,current.url);}
+ async openChart(source:SourceName):Promise<VerificationStatus>{return this.browser.verification(source,this.indexUrl(source,new Date().getUTCFullYear(),1));}
+ async openSearch(source:SourceName,query:string):Promise<VerificationStatus>{return this.browser.verification(source,this.querySearchUrl(source,query));}
  private async load():Promise<void>{if(this.loaded)return;this.loaded=true;try{this.cache=JSON.parse(await readFile(join(this.dataDir,'source-cache.json'),'utf8')) as Record<string,CacheEntry>;}catch{this.cache={};}}
  private async save():Promise<void>{await mkdir(this.dataDir,{recursive:true,mode:0o700});const path=join(this.dataDir,'source-cache.json');await writeFile(path,JSON.stringify(this.cache),{mode:0o600});await chmod(path,0o600);}
  private async html(source:SourceName,url:string,settings:Settings):Promise<string>{
@@ -31,7 +32,8 @@ export class SourceService {
  }
  private async detail(source:SourceName,url:string,settings:Settings):Promise<Album|null>{const cached=this.cache[url];if(cached&&Date.now()-cached.at<TTL)return structuredClone(cached.album);const result=parsers[source](await this.html(source,url,settings),url);if(result)this.cache[url]={at:Date.now(),album:result};return result;}
  private indexUrl(source:SourceName,year:number,page:number):string {if(source==='aoty')return `${origins.aoty}/ratings/user-highest-rated/lp/${year}/?p=${page}`;if(source==='rym')return `${origins.rym}/charts/top/album/${year}/${page}/`;return `${origins.pitchfork}/reviews/albums/?page=${page}`;}
- private searchUrl(source:SourceName,album:Album):string{const q=encodeURIComponent(`${album.artist} ${album.title}`);return source==='aoty'?`${origins.aoty}/search/?q=${q}`:source==='rym'?`${origins.rym}/search?searchterm=${q}&searchtype=l`:`${origins.pitchfork}/search/?query=${q}`;}
+ private querySearchUrl(source:SourceName,query:string):string{const q=encodeURIComponent(query);return source==='aoty'?`${origins.aoty}/search/?q=${q}`:source==='rym'?`${origins.rym}/search?searchterm=${q}&searchtype=l`:`${origins.pitchfork}/search/?query=${q}`;}
+ private searchUrl(source:SourceName,album:Album):string{return this.querySearchUrl(source,`${album.artist} ${album.title}`);}
  private merge(map:Map<string,Album>,fresh:Album):void{
   const key=normalizeIdentity(fresh.artist)+'|'+normalizeIdentity(fresh.title);const old=map.get(key);
   if(!old){map.set(key,fresh);return;}

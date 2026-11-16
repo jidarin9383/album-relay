@@ -26,8 +26,8 @@ it('captures the already-open document through an authenticated, locked API with
   expect((await app.inject({method:'POST',url:'/api/sources/rym/chart'})).statusCode).toBe(401);
   expect((await app.inject({method:'POST',url:'/api/sources/rym/capture'})).statusCode).toBe(401);
   const setup=await app.inject({method:'POST',url:'/api/setup',payload:{password:'capture-test-password-123'}});const cookie=setup.headers['set-cookie'] as string;
-  expect((await app.inject({method:'POST',url:'/api/sources/pitchfork/chart',headers:{cookie}})).statusCode).toBe(400);
-  expect((await app.inject({method:'POST',url:'/api/sources/pitchfork/capture',headers:{cookie}})).statusCode).toBe(400);
+  expect((await app.inject({method:'POST',url:'/api/sources/unknown/chart',headers:{cookie}})).statusCode).toBe(400);
+  expect((await app.inject({method:'POST',url:'/api/sources/unknown/capture',headers:{cookie}})).statusCode).toBe(400);
   expect((await app.inject({method:'POST',url:'/api/sources/rym/capture',headers:{cookie,origin:'http://evil.example'}})).statusCode).toBe(403);
   store.acquireLock('other');
   expect((await app.inject({method:'POST',url:'/api/sources/rym/chart',headers:{cookie}})).statusCode).toBe(409);
@@ -58,7 +58,7 @@ it('captures the already-open document through an authenticated, locked API with
   currentError=new Error('Playwright internal crash');
   res=await app.inject({method:'POST',url:'/api/sources/rym/capture',headers:{cookie}});
   expect(res.statusCode).toBe(400);
-  expect(res.json().error).toBe('未收录：请确认独立浏览器打开的是对应站点的用户评分榜，已完成验证和加载，再重试。');
+  expect(res.json().error).toBe('未收录：请确认独立浏览器打开的是对应站点的榜单或单张专辑/乐评页，已完成验证和加载，再重试。');
   expect(store.captures()).toHaveLength(1);expect(store.albums()).toHaveLength(1);
   expect(store.runs()).toHaveLength(0);expect(store.playlists()).toHaveLength(0);
  }finally{store.close();await app.close();rmSync(dir,{recursive:true,force:true});}
@@ -145,6 +145,86 @@ it('completes capture, library_preview and sync end-to-end through HTTP without 
   expect(playlists).toHaveLength(1);
   expect(playlists[0]).toMatchObject({id:'pl-1',originalId:5001,trackCount:2});
   expect(playlists[0].albumIds).toHaveLength(1);
+ }finally{
+  await app.close();
+  rmSync(dir,{recursive:true,force:true});
+ }
+});
+it('supports single-page RYM/AOTY/Pitchfork capture, search opening, conflict merge and listening status',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'relay-phase1-complete-'));
+ const d1=new Date(Date.now()-20*86400000);
+ const d2=new Date(Date.now()-19*86400000);
+ const months=['January','February','March','April','May','June','July','August','September','October','November','December'];
+ const fmtAoty=(d:Date)=>`${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+ const fmtRym=(d:Date)=>`${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+ let current={html:'',url:''};
+ const searched:{source?:string;targetUrl?:string}[]=[];
+ const browser={
+  connected:true,
+  async read(){return {html:'',status:500}},
+  async current(){return current},
+  async verification(source?:string,targetUrl?:string){searched.push({source,targetUrl});return {available:true,active:true,source:source as 'rym'|'aoty'|'pitchfork'|undefined,message:'ok'};},
+  async close(){}
+ };
+ const app=await createApp({dataDir:dir,scheduler:false,sources:new SourceService(dir,browser)});
+ try{
+  const setup=await app.inject({method:'POST',url:'/api/setup',payload:{password:'phase1-complete-password-123'}});
+  const cookie=setup.headers['set-cookie'] as string;
+
+  // Search endpoint opens canonical search URL and refuses capturing a search results page
+  const searchRes=await app.inject({method:'POST',url:'/api/sources/aoty/search',headers:{cookie},payload:{query:'Stars Moon'}});
+  expect(searchRes.statusCode).toBe(200);
+  expect(searched[0]).toEqual({source:'aoty',targetUrl:'https://www.albumoftheyear.org/search/?q=Stars%20Moon'});
+  current={html:'<div>Search results</div>',url:'https://www.albumoftheyear.org/search/?q=Stars%20Moon'};
+  const searchCap=await app.inject({method:'POST',url:'/api/sources/aoty/capture',headers:{cookie}});
+  expect(searchCap.statusCode).toBe(400);expect(searchCap.json().error).toContain('搜索结果列表');
+
+  // Non-LP AOTY chart -> Unknown format, upgraded by AOTY album detail capture -> LP
+  current={html:aotyChart.replace('October 30, 2026',fmtAoty(d1)),url:'https://www.albumoftheyear.org/ratings/user-highest-rated/2026/'};
+  const nonLp=await app.inject({method:'POST',url:'/api/sources/aoty/capture',headers:{cookie}});
+  expect(nonLp.statusCode).toBe(200);
+  expect((await app.inject({url:'/api/albums',headers:{cookie}})).json()[0].format).toBe('Unknown');
+
+  current={
+   html:`<div class="artist">Stars</div><div class="albumTitle">Moon</div><div class="albumUserScoreBox"><div class="albumUserScore">85</div><div class="text numReviews">Based on <strong>4,942</strong> ratings</div></div><div class="detailRow">${fmtAoty(d1)} / release date</div><div class="detailRow">LP / format</div>`,
+   url:'https://www.albumoftheyear.org/album/1-stars-moon.php'
+  };
+  const aotyDetail=await app.inject({method:'POST',url:'/api/sources/aoty/capture',headers:{cookie}});
+  expect(aotyDetail.statusCode).toBe(200);expect(aotyDetail.json()).toMatchObject({added:0,updated:1});
+  expect((await app.inject({url:'/api/albums',headers:{cookie}})).json()[0].format).toBe('LP');
+
+  // Pitchfork single review capture (empty releaseDate corroborates existing album without date conflict)
+  const pfState={transformed:{review:{headerProps:{artists:[{name:'Stars'}],title:'Moon',musicRating:{rating:8.4,bestNewMusic:true,bestNewReissue:false}}}}};
+  current={html:`<script>window.__PRELOADED_STATE__=${JSON.stringify(pfState)};</script>`,url:'https://pitchfork.com/reviews/albums/stars-moon/'};
+  const pfRes=await app.inject({method:'POST',url:'/api/sources/pitchfork/capture',headers:{cookie}});
+  expect(pfRes.statusCode).toBe(200);expect(pfRes.json()).toMatchObject({added:0,updated:1});
+  let albums=(await app.inject({url:'/api/albums',headers:{cookie}})).json();
+  expect(albums[0].sources).toHaveLength(2);
+  expect(albums[0].decision.status).toBe('selected');
+
+  // RYM single release capture with 1-day date difference triggers conflict, then manual merge resolves it
+  current={
+   html:`<h1 class="album_title">Moon</h1><span class="album_artist"><a>Stars</a></span><span itemprop="ratingValue">3.9</span><span itemprop="ratingCount">6k</span><table><tr><th>Released</th><td>${fmtRym(d2)}</td></tr><tr><th>Type</th><td>Album</td></tr></table>`,
+   url:'https://rateyourmusic.com/release/album/stars/moon/'
+  };
+  const rymConflict=await app.inject({method:'POST',url:'/api/sources/rym/capture',headers:{cookie}});
+  expect(rymConflict.statusCode).toBe(200);
+  const receipt=rymConflict.json();
+  expect(receipt.updated).toBe(0);expect(receipt.conflicts).toHaveLength(1);
+  expect(receipt.conflicts[0].sources[0]).toMatchObject({source:'rym',votes:6000,votesApproximate:true});
+
+  const merged=await app.inject({method:'POST',url:`/api/captures/${receipt.id}/merge`,headers:{cookie},payload:{url:'https://rateyourmusic.com/release/album/stars/moon/'}});
+  expect(merged.statusCode).toBe(200);
+  expect(merged.json().updated).toBe(1);expect(merged.json().conflicts).toEqual([]);
+  albums=(await app.inject({url:'/api/albums',headers:{cookie}})).json();
+  expect(albums[0].sources).toHaveLength(3);
+
+  // Listening status persistence & invalid rejection
+  const id=albums[0].id as string;
+  expect((await app.inject({method:'POST',url:`/api/albums/${id}/status`,headers:{cookie},payload:{listeningStatus:'invalid'}})).statusCode).toBe(400);
+  const statusRes=await app.inject({method:'POST',url:`/api/albums/${id}/status`,headers:{cookie},payload:{listeningStatus:'liked'}});
+  expect(statusRes.statusCode).toBe(200);expect(statusRes.json().listeningStatus).toBe('liked');
+  expect((await app.inject({url:'/api/albums',headers:{cookie}})).json()[0].listeningStatus).toBe('liked');
  }finally{
   await app.close();
   rmSync(dir,{recursive:true,force:true});

@@ -8,10 +8,12 @@ export interface Observation {
 }
 export interface Track { id: string; originalId: number; name: string; duration?: number }
 export interface MatchedAlbum { id: string; originalId: number; name: string; artist: string; releaseDate: string; tracks: Track[] }
+export type ListeningStatus = 'unheard' | 'saved' | 'listened' | 'liked' | 'disliked' | 'skipped';
 export interface Decision { status: 'selected' | 'pending' | 'disagreement' | 'excluded' | 'too_new' | 'out_of_window' | 'format_conflict'; qualifyingSources: SourceName[]; reasons: string[] }
 export interface Album {
   id: string; artist: string; title: string; releaseDate: string; format: 'LP' | 'EP' | 'Reissue' | 'Unknown';
   coverUrl?: string; genres: string[]; sources: Observation[]; excluded: boolean;
+  listeningStatus?: ListeningStatus;
   decision?: Decision; match?: MatchedAlbum | null; admittedMonth?: string; rationale?: string;
 }
 export interface Settings {
@@ -33,5 +35,5 @@ export interface Run { id: string; mode: RunMode; status: RunState; stage: strin
 export interface ConnectionStatus { configured: boolean; loggedIn: boolean; message: string; checking?: boolean; qrCodeUrl?: string; loginState?: 'idle' | 'waiting' | 'authorized' | 'expired' | 'error' }
 export interface Overview { albums: number; selected: number; pending: number; disagreements: number; playlists: Playlist[]; lastRun: Run | null; nextRun: string | null; sourceStatuses: SourceStatus[]; connection: ConnectionStatus }
 export interface VerificationStatus { available: boolean; active: boolean; message: string; url?: string; source?: SourceName }
-export interface ChartCapture { source: 'rym' | 'aoty'; pageUrl: string; observedAt: string; albums: Album[]; warnings: string[] }
+export interface ChartCapture { source: SourceName; pageUrl: string; observedAt: string; albums: Album[]; warnings: string[]; conflicts?: Album[] }
 export interface CaptureReceipt extends ChartCapture { id: string; added: number; updated: number }

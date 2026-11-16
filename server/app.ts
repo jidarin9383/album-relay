@@ -14,7 +14,7 @@ import { NeteaseClient } from './netease.js';
 import { Runner } from './runner.js';
 import { Scheduler } from './scheduler.js';
 import { decide, todayInTimezone } from './policy.js';
-import { saveCapture } from './capture.js';
+import { saveCapture, mergeCaptureConflict } from './capture.js';
 import { CaptureError } from './sources/charts.js';
 
 const names:SourceName[]=['aoty','rym','pitchfork'];
@@ -62,14 +62,26 @@ export async function createApp(options:{dataDir:string;scheduler?:boolean;sourc
  app.get('/api/albums',async()=>store.albums());
  app.get('/api/captures',async()=>store.captures());
  app.post<{Params:{source:string}}>('/api/sources/:source/chart',async(req,reply)=>{
-  const name=req.params.source;if(name!=='rym'&&name!=='aoty')return reply.code(400).send({error:'当前榜单收录支持 RYM 和 AOTY'});
+  const name=source(req.params.source);if(!name)return reply.code(400).send({error:'来源无效'});
   return sourceAction(reply,()=>sources.openChart(name));
  });
+ app.post<{Params:{source:string}}>('/api/sources/:source/search',async(req,reply)=>{
+  const name=source(req.params.source);
+  const parsed=z.object({query:z.string().trim().min(1).max(200)}).safeParse(req.body);
+  if(!name||!parsed.success)return reply.code(400).send({error:'请选择有效来源并输入专辑或艺人名称'});
+  return sourceAction(reply,()=>sources.openSearch(name,parsed.data.query));
+ });
  app.post<{Params:{source:string}}>('/api/sources/:source/capture',async(req,reply)=>{
-  const name=req.params.source;if(name!=='rym'&&name!=='aoty')return reply.code(400).send({error:'当前榜单收录支持 RYM 和 AOTY'});
-  return sourceAction(reply,async()=>{try{return saveCapture(store,await sources.captureCurrent(name));}catch(e){return reply.code(400).send({error:e instanceof CaptureError?e.message:'未收录：请确认独立浏览器打开的是对应站点的用户评分榜，已完成验证和加载，再重试。'});}});
+  const name=source(req.params.source);if(!name)return reply.code(400).send({error:'来源无效'});
+  return sourceAction(reply,async()=>{try{return saveCapture(store,await sources.captureCurrent(name));}catch(e){return reply.code(400).send({error:e instanceof CaptureError?e.message:'未收录：请确认独立浏览器打开的是对应站点的榜单或单张专辑/乐评页，已完成验证和加载，再重试。'});}});
+ });
+ app.post<{Params:{id:string}}>('/api/captures/:id/merge',async(req,reply)=>{
+  const parsed=z.object({url:z.string().url().max(500)}).safeParse(req.body);
+  if(!parsed.success)return reply.code(400).send({error:'合并参数无效'});
+  return sourceAction(reply,async()=>{try{return mergeCaptureConflict(store,req.params.id,parsed.data.url);}catch{return reply.code(404).send({error:'待合并记录不存在或已处理'});}});
  });
  app.post<{Params:{id:string}}>('/api/albums/:id/exclude',async(req,reply)=>{const parsed=z.object({excluded:z.boolean()}).safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:'参数无效'});const owner=`http-action:${randomUUID()}`;if(!store.acquireLock(owner))return reply.code(409).send({error:'任务运行中，请完成后再调整专辑'});try{const albums=store.albums(),album=albums.find(a=>a.id===req.params.id);if(!album)return reply.code(404).send({error:'专辑不存在'});const settings=store.settings();album.excluded=parsed.data.excluded;album.decision=decide(album,settings,todayInTimezone(settings.schedule.timezone));store.saveAlbums(albums);return album;}finally{store.releaseLock(owner);}});
+ app.post<{Params:{id:string}}>('/api/albums/:id/status',async(req,reply)=>{const parsed=z.object({listeningStatus:z.enum(['unheard','saved','listened','liked','disliked','skipped'])}).safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:'听歌状态无效'});const owner=`http-action:${randomUUID()}`;if(!store.acquireLock(owner))return reply.code(409).send({error:'任务运行中，请完成后再调整专辑'});try{const albums=store.albums(),album=albums.find(a=>a.id===req.params.id);if(!album)return reply.code(404).send({error:'专辑不存在'});album.listeningStatus=parsed.data.listeningStatus;store.saveAlbums(albums);return album;}finally{store.releaseLock(owner);}});
  app.get('/api/runs',async()=>store.runs());
  app.get<{Params:{id:string}}>('/api/runs/:id',async(req,reply)=>store.runs().find(r=>r.id===req.params.id)??reply.code(404).send({error:'运行记录不存在'}));
  app.post('/api/runs',async(req,reply)=>{const parsed=z.object({mode:z.enum(['refresh','preview','library_preview','sync'])}).safeParse(req.body);if(!parsed.success)return reply.code(400).send({error:'任务类型无效'});try{return runner.start(parsed.data.mode as RunMode);}catch(e){return reply.code(409).send({error:e instanceof Error?e.message:'无法启动任务'});}});

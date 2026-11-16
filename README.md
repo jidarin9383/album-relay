@@ -33,7 +33,7 @@ In **Connections**, enter your own developer credentials and scan the login QR c
 
 ## Assisted chart capture
 
-The Connections page can capture the current RYM/AOTY chart from the private browser into the persistent album library. Scores, source links, capture history and approximate vote counts are retained, and **Library preview (`资料库预览`)** can match saved qualifying albums directly to NetEase without re-scraping rating sites. This is user-initiated collection; it does not require paid services or manual score entry. See [the capture guide](docs/assisted-capture.md) for setup and current limits.
+The Connections page can capture the current RYM/AOTY chart, individual RYM/AOTY release pages, or individual Pitchfork album reviews from the private browser into the persistent album library (including name-based browser search and manual conflict merge). Scores, source links, capture history, listening statuses and approximate vote counts are retained, and **Library preview (`资料库预览`)** can match saved qualifying albums directly to NetEase without re-scraping rating sites. This is user-initiated collection; it does not require paid services or manual score entry. See [the capture guide](docs/assisted-capture.md) and [the verification ledger](docs/verification.md) for setup, verified checks and current limits.
 
 ## Selection and sync
 

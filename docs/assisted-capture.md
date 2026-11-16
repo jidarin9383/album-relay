@@ -1,17 +1,17 @@
-# Assisted chart capture
+# Assisted chart and release capture
 
-Album Relay can save ratings from an already-open RYM or AOTY chart into its private album library. It uses the existing service-owned browser; it does not require Codex, a browser extension, paid scraping APIs or manual score entry.
+Album Relay can save ratings from an already-open RYM, AOTY, or Pitchfork page into its private album library. It supports annual RYM/AOTY chart pages, single RYM/AOTY album pages, Pitchfork album review pages, and name-based browser search. It uses the existing service-owned browser; it does not require Codex, a browser extension, paid scraping APIs or manual score entry.
 
 ## Use
 
-1. Run the application and browser sidecar with Docker Compose. Sign into the application's administrator page.
-2. Open **Connections and sources**. In the chart capture panel, click **Open chart** for RYM or AOTY.
-3. Follow **Enter private browser** and wait for the chart to load. Complete a human challenge yourself if the site requests one. Use the same provided browser tab; do not open a separate browser tab for the chart.
-4. Return to Album Relay and click **Capture current chart** for that source. This action reads the current document without following its detail links. It captures at most 60 rows per action.
-5. Repeat for the other source. Review the album library, decision reasons and capture history. No NetEase operation occurs during capture.
-6. When ready to match qualifying albums in your library to NetEase Cloud Music without re-scraping rating sites, click **Library preview (`资料库预览`)** from the capture panel or album library. Review matched tracks and any unmatched warnings, then click **Sync playlist (`同步歌单`)** once NetEase is connected.
+1. Run the application locally (`BROWSER_HEADLESS=false npm start`) or run the application and browser sidecar with Docker Compose. Sign into the application's administrator page.
+2. Open **Connections and sources**. In the capture panel, either click **Open page** (`打开页面`) on RYM, AOTY or Pitchfork, or enter an artist/album name in the search field and click **Search RYM / Search AOTY / Search Pitchfork**.
+3. Follow **Enter private browser** (or switch to the opened local browser window) and wait for the page to load. Complete a human challenge yourself if requested. If you used search, click through to the specific album release or Pitchfork album review page in that same tab.
+4. Return to Album Relay and click **Capture current page** (`收录当前页面`) for that source. Chart captures read at most 60 rows from the current chart without crawling links; detail captures read the single open release or review page.
+5. Repeat for other sources. If a captured record differs slightly in release date or edition from an existing album, review it under **待确认合并** and click **Confirm merge** (`确认合并`) only after confirming both refer to the same release.
+6. Review the album library (filterable by decision, source, and listening status), then click **Library preview (`资料库预览`)** to match qualifying saved albums to NetEase Cloud Music without re-scraping rating sites. Review matched tracks and warnings, then click **Sync playlist (`同步歌单`)** once NetEase is connected.
 
-The initial links open the current annual RYM album chart and AOTY LP user-score chart. Other supported user charts can be visited in the same private tab. Non-LP-filtered AOTY charts do not establish LP format; they stay pending until reliable matching evidence supplies it. Annual charts are discovery inputs; the configured release-date window still applies.
+The initial links open the current annual RYM album chart, AOTY LP user-score chart, and Pitchfork album review index (open an individual review article before capturing Pitchfork). Non-LP-filtered AOTY charts leave format as `Unknown` until a single AOTY album page or corroborating RYM record supplies `LP`. Annual charts are discovery inputs; the configured release-date window still applies.
 
 ## Evidence and rules
 
@@ -28,7 +28,7 @@ Capture history is stored in SQLite alongside the library. The UI lists the late
 - Capture is user initiated and covers the loaded page, not an exhaustive feed or guaranteed automatic discovery.
 - Source availability checks and background refresh are separate. A successful capture does not declare all source pages accessible.
 - **Library preview (`资料库预览`)** evaluates saved library evidence (within a 7-day capture freshness window) without background source scraping, whereas **Generate preview (`生成预览`)** and scheduled runs still perform bounded source refreshes while preserving fresh (< 7 days) `browser-capture` observations if a site blocks automated requests.
-- There is no Pitchfork current-chart capture adapter in this increment. The existing background review adapter remains available.
-- RYM/AOTY access challenges and site permissions still apply. Reading a page successfully does not establish permission to collect or redistribute its data. Keep personal captures private and review upstream terms before use.
+- Pitchfork index and search pages do not contain review scores; open an individual Pitchfork album review page before capturing.
+- RYM/AOTY/Pitchfork access challenges and site permissions still apply. Reading a page successfully does not establish permission to collect or redistribute its data. Keep personal captures private and review upstream terms before use.
 
 The parser is independently implemented against observed page structures. The implementation research compared the MIT-licensed [Comping](https://github.com/dbeley/comping) and [RYM Release Export](https://github.com/sichengchen/rym-release-export) projects; their extension source is not bundled into this application.
