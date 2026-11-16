@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
 import type { Album, MatchedAlbum, Playlist, Run, RunMode, Settings, SourceStatus, SyncPreview } from '../shared/types.js';
-import { decide } from './policy.js';
+import { decide, todayInTimezone } from './policy.js';
 import { planSync } from './planner.js';
 export interface RunnerStore {
  settings():Settings; albums():Album[];saveAlbums(albums:Album[]):void;playlists():Playlist[];savePlaylist(playlist:Playlist):void;runs():Run[];saveRun(run:Run):void;
@@ -12,7 +12,7 @@ interface Target {match(album:Album):Promise<MatchedAlbum|null>;sync(preview:Syn
 interface SavedPreview {runId:string;createdAt:string;settingsHash:string;albumsHash:string;preview:SyncPreview;usable:boolean}
 const hash=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const stamp=()=>new Date().toISOString();
-function today(settings:Settings):string{const p=new Intl.DateTimeFormat('en-US',{timeZone:settings.schedule.timezone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts();return `${p.find(x=>x.type==='year')!.value}-${p.find(x=>x.type==='month')!.value}-${p.find(x=>x.type==='day')!.value}`;}
+const today=(settings:Settings)=>todayInTimezone(settings.schedule.timezone);
 export class Runner {
  private pending:Promise<void>=Promise.resolve();
  constructor(private readonly store:RunnerStore,private readonly sources:Sources,private readonly netease:Target){}

@@ -2,7 +2,8 @@ import { mkdir, readFile, writeFile, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Album, Settings, SourceName, SourceStatus, VerificationStatus } from '../../shared/types.js';
 import { normalizeIdentity, origins, isChallenge, parseAoty, parseRym, parsePitchfork, parseIndex } from './parsers.js';
-import { SourceBrowser } from './browser.js';
+import { SourceBrowser, type BrowserReader } from './browser.js';
+import { parseChart } from './charts.js';
 const names:SourceName[]=['aoty','rym','pitchfork'];
 const parsers={aoty:parseAoty,rym:parseRym,pitchfork:parsePitchfork};
 const MAX_DETAILS=24, MAX_LOOKUPS=40, PAGES=3, TTL=6*60*60*1000;
@@ -10,8 +11,10 @@ class Blocked extends Error{}
 interface CacheEntry { at:number; album:Album }
 /** Bounded public-source acquisition. No account credentials or full articles are stored. */
 export class SourceService {
- private browser:SourceBrowser;private blocked=new Set<SourceName>();private last=new Map<SourceName,number>();private cache:Record<string,CacheEntry>={};private loaded=false;
- constructor(private readonly dataDir:string){this.browser=new SourceBrowser(dataDir);}
+ private browser:BrowserReader;private blocked=new Set<SourceName>();private last=new Map<SourceName,number>();private cache:Record<string,CacheEntry>={};private loaded=false;
+ constructor(private readonly dataDir:string,browser?:BrowserReader){this.browser=browser??new SourceBrowser(dataDir);}
+ async captureCurrent(source:'rym'|'aoty') {const current=await this.browser.current();return parseChart(source,current.html,current.url);}
+ async openChart(source:'rym'|'aoty'):Promise<VerificationStatus>{return this.browser.verification(source,this.indexUrl(source,new Date().getUTCFullYear(),1));}
  private async load():Promise<void>{if(this.loaded)return;this.loaded=true;try{this.cache=JSON.parse(await readFile(join(this.dataDir,'source-cache.json'),'utf8')) as Record<string,CacheEntry>;}catch{this.cache={};}}
  private async save():Promise<void>{await mkdir(this.dataDir,{recursive:true,mode:0o700});const path=join(this.dataDir,'source-cache.json');await writeFile(path,JSON.stringify(this.cache),{mode:0o600});await chmod(path,0o600);}
  private async html(source:SourceName,url:string,settings:Settings):Promise<string>{

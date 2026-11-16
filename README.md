@@ -31,9 +31,13 @@ Open `http://<host-address>:3210` from the local network. Set the administrator 
 
 In **Connections**, enter your own developer credentials and scan the login QR code. Closing the QR panel does not guarantee the official CLI has stopped its background authorization poll; do not scan a closed or old QR code. Complete any source verification in the authenticated verification window, then retry the source check or preview. Credential state and browser profiles are private; include them only in protected backups. The official CLI currently accepts the private key through a process argument during configuration, which privileged local process observers could briefly see. Do not use a shared untrusted host.
 
+## Assisted chart capture
+
+The Connections page can capture the current RYM/AOTY chart from the private browser into the persistent album library. Scores, source links, capture history and approximate vote counts are retained. This is user-initiated collection; it does not require paid services or manual score entry. See [the capture guide](docs/assisted-capture.md) for setup and current limits.
+
 ## Selection and sync
 
-Default rules: releases in the last 90 days, at least 7 days old, with at least two qualifying sources. AOTY requires 80/100 and 100 ratings, RYM 3.5/5 and 100 ratings, and Pitchfork 8/10 or Best New Music. A clearly low third score flags disagreement. Missing, stale, blocked or unmatched data is not a low score and is never invented. Scores, minimum votes, time window and weekly schedule can be configured; the minimum source count is two.
+Default rules: releases in the last 90 days, at least 7 days old, with at least two qualifying sources. AOTY requires 80/100 and 100 ratings, RYM 3.5/5 and 100 ratings, and Pitchfork 8/10 or Best New Music. A clearly low third score flags disagreement. Missing, stale, blocked or unmatched data is not a low score and is never invented. Scores, minimum votes, time window and weekly schedule can be configured; the minimum source count defaults to two and can be set from one to three.
 
 Start with **Generate preview**. A preview samples source pages, cross-checks identities, and matches complete NetEase albums. It may take a while due to conservative request spacing. Inspect its run and then choose **Sync playlist**. Automatic sync is off by default; when enabled, the proposed default is Wednesday at 12:00 Asia/Taipei. It writes only after a complete successful preview. Partial or blocked source runs cannot write; they require inspection and a retry. The monthly format is `高分新专辑｜YYYY-MM`. Sync preserves existing user tracks, groups new album tracks, checkpoints the playlist ID and verifies readback. Descriptions use observed evidence, not invented listening impressions, and are capped at 1,000 characters.
 

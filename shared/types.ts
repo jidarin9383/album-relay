@@ -4,6 +4,7 @@ export interface Observation {
   source: SourceName; score: number | null; scale: number; votes: number | null;
   votesDisplay?: string; bestNewMusic?: boolean; url: string; observedAt: string;
   status: SourceState; notes?: string;
+  votesApproximate?: boolean; collectionMethod?: 'browser-capture'; sourcePageUrl?: string;
 }
 export interface Track { id: string; originalId: number; name: string; duration?: number }
 export interface MatchedAlbum { id: string; originalId: number; name: string; artist: string; releaseDate: string; tracks: Track[] }
@@ -14,6 +15,7 @@ export interface Album {
   decision?: Decision; match?: MatchedAlbum | null; admittedMonth?: string; rationale?: string;
 }
 export interface Settings {
+  allowApproximateVotes?: boolean;
   lookbackDays: number; minimumAgeDays: number; minSources: number;
   thresholds: { aoty: { score: number; votes: number; negative: number }; rym: { score: number; votes: number; negative: number }; pitchfork: { score: number; negative: number; allowBnm: boolean } };
   sources: Record<SourceName, boolean>;
@@ -31,3 +33,5 @@ export interface Run { id: string; mode: RunMode; status: RunState; stage: strin
 export interface ConnectionStatus { configured: boolean; loggedIn: boolean; message: string; checking?: boolean; qrCodeUrl?: string; loginState?: 'idle' | 'waiting' | 'authorized' | 'expired' | 'error' }
 export interface Overview { albums: number; selected: number; pending: number; disagreements: number; playlists: Playlist[]; lastRun: Run | null; nextRun: string | null; sourceStatuses: SourceStatus[]; connection: ConnectionStatus }
 export interface VerificationStatus { available: boolean; active: boolean; message: string; url?: string; source?: SourceName }
+export interface ChartCapture { source: 'rym' | 'aoty'; pageUrl: string; observedAt: string; albums: Album[]; warnings: string[] }
+export interface CaptureReceipt extends ChartCapture { id: string; added: number; updated: number }
