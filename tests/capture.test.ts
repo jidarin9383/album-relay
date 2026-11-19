@@ -39,8 +39,8 @@ describe('current chart capture',()=>{
   r.sources.push(...a.sources);
   // '6k' guarantees >= 5,500 votes, well above default 100.
   expect(decide(r,defaultSettings,'2026-11-16').status).toBe('selected');
-  // Against a threshold inside the [5500, 6499] uncertainty interval, opt-in is still required.
-  const narrow={...defaultSettings,thresholds:{...defaultSettings.thresholds,rym:{...defaultSettings.thresholds.rym,votes:5800}}};
+  // Against a threshold inside the [5500, 6499] uncertainty interval when opt-out is set, approximate votes stay pending.
+  const narrow={...defaultSettings,allowApproximateVotes:false,allowSingleSourceAcclaim:false,thresholds:{...defaultSettings.thresholds,rym:{...defaultSettings.thresholds.rym,votes:5800}}};
   expect(decide(r,narrow,'2026-11-16').status).toBe('pending');
   expect(decide(r,{...narrow,allowApproximateVotes:true},'2026-11-16').status).toBe('selected');
  });
@@ -53,7 +53,7 @@ describe('current chart capture',()=>{
   expect(a.sources[0]?.votesApproximate).toBe(true);
   delete a.sources[0]!.votesApproximate;
   expect(decide(a,{...defaultSettings,minSources:1},'2026-11-16').status).toBe('selected');
-  const tight={...defaultSettings,minSources:1,thresholds:{...defaultSettings.thresholds,rym:{...defaultSettings.thresholds.rym,votes:1200}}};
+  const tight={...defaultSettings,minSources:1,allowApproximateVotes:false,thresholds:{...defaultSettings.thresholds,rym:{...defaultSettings.thresholds.rym,votes:1200}}};
   expect(decide(a,tight,'2026-11-16').status).toBe('pending');
   expect(decide(a,{...tight,allowApproximateVotes:true},'2026-11-16').status).toBe('selected');
  });
@@ -133,5 +133,9 @@ describe('current chart capture',()=>{
   const aotyWithImg=aotyChart.replace('<h2 class="albumListTitle">','<div class="albumListCover"><img data-src="https://cdn2.albumoftheyear.org/375x0/album/1-moon.jpg" /></div><h2 class="albumListTitle">');
   expect(parseChart('rym',rymWithImg,rymUrl).albums[0]?.coverUrl).toBe('https://e.snmc.io/i/300/s/moon.jpg');
   expect(parseChart('aoty',aotyWithImg,aotyUrl).albums[0]?.coverUrl).toBe('https://cdn2.albumoftheyear.org/375x0/album/1-moon.jpg');
+ });
+ it('extracts RYM chart genres from primary and secondary genre links',()=>{
+  const rymWithGenres=rymChart.replace('<span class="page_charts_section_charts_item_details_average_num">','<div class="page_charts_section_charts_item_genres_primary"><a class="genre">Post-Punk</a><a class="genre">Noise Rock</a></div><div class="page_charts_section_charts_item_genres_secondary"><a class="genre">Noise Rock</a><a class="genre">Sludge Metal</a></div><span class="page_charts_section_charts_item_details_average_num">');
+  expect(parseChart('rym',rymWithGenres,rymUrl).albums[0]?.genres).toEqual(['Post-Punk','Noise Rock','Sludge Metal']);
  });
 });

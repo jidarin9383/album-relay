@@ -131,6 +131,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message?.type === 'run-now') {
     startRun(true).then(sendResponse, (e) => sendResponse({ error: e.message }));
     return true;
+  } else if (message?.type === 'backfill-now') {
+    startRun(true, null, { backfillOnly: true }).then(sendResponse, (e) => sendResponse({ error: e.message }));
+    return true;
   } else if (message?.type === 'tick-now') {
     tick().then(() => sendResponse({ ok: true }), (e) => sendResponse({ error: e.message }));
     return true;
@@ -139,6 +142,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // ---------- B: scheduled refresh (state machine driven by alarms; the worker may be unloaded between steps) ----------
+
+function buildQueue(config, backfillOnly = false) {
+  const list = [];
+  if (!backfillOnly && Array.isArray(config?.refresh?.targets)) {
+    list.push(...config.refresh.targets);
+  }
+  if (config?.detailBackfill?.enabled && Array.isArray(config.detailBackfill.targets)) {
+    list.push(...config.detailBackfill.targets);
+  }
+  return [...new Set(list)];
+}
 
 async function getRun() {
   return (await chrome.storage.local.get('run')).run || null;
@@ -157,24 +171,31 @@ async function tick() {
     return;
   }
   const refresh = config.refresh;
+  const queue = buildQueue(config, false);
   const { lastRunDate } = await chrome.storage.local.get('lastRunDate');
   const run = await getRun();
-  if (!refresh.enabled || !refresh.targets.length) return;
+  if (!refresh.enabled || !queue.length) return;
   if (run && ['scheduled', 'running'].includes(run.status)) return;
   if (lastRunDate === today() || new Date().getHours() < refresh.hour) return;
-  await startRun(false, refresh.targets);
+  await startRun(false, queue);
 }
 
-async function startRun(manual, targets) {
+async function startRun(manual, targets, opts = {}) {
   const current = await getRun();
   if (current && ['scheduled', 'running'].includes(current.status)) return { error: '定时刷新正在进行' };
+  const backfillOnly = Boolean(opts.backfillOnly);
   if (!targets) {
     const config = await api('/api/ext/config');
-    targets = config.refresh.targets;
+    await chrome.storage.local.set({ config, lastContact: new Date().toISOString(), lastError: null });
+    targets = buildQueue(config, backfillOnly);
   }
-  if (!targets.length) return { error: '没有配置要刷新的页面' };
-  // Mark the day first so an interrupted run is not retried every tick.
-  await chrome.storage.local.set({ lastRunDate: today() });
+  if (!targets.length) {
+    return { error: backfillOnly ? '当前没有需要补抓的已入选专辑详情页（或尚未开启详情页补抓开关）' : '没有配置要刷新的页面' };
+  }
+  // Mark the day first so an interrupted scheduled run is not retried every tick.
+  if (!backfillOnly) {
+    await chrome.storage.local.set({ lastRunDate: today() });
+  }
   const delay = manual ? 0 : random(0, START_JITTER_MS);
   await setRun({ status: 'scheduled', manual, queue: targets, index: 0, tabId: null, startedAt: new Date().toISOString(), results: [] });
   await chrome.alarms.create('run-step', { when: Date.now() + Math.max(delay, 1000) });

@@ -20,21 +20,22 @@
   </style>
 </head>
 <body>
-  <h1>Album Relay Capture</h1>
-  <p class="lead">在你平时用的 Chrome 里打开 RYM / AOTY 榜单、专辑页或 Pitchfork 乐评时，自动送到你的 Album Relay 资料库。不会替你点击或通过任何验证。</p>
+  <h1>新声簿扩展 · Album Relay Capture</h1>
+  <p class="lead">在日常 Chrome 中打开 RYM、AOTY 或 Pitchfork 页面即可自动送入新声簿资料库；遇站点验证由你手动完成，扩展绝不代点。</p>
 
-  <h2>连接</h2>
-  <label for="server">Album Relay 地址</label>
+  <h2>连接设置</h2>
+  <label for="server">新声簿地址</label>
   <input id="server" placeholder="http://192.168.1.10:3210" autocomplete="off">
   <label for="token">配对令牌</label>
-  <input id="token" placeholder="在 Album Relay「连接与来源 → 浏览器扩展」中生成，以 ar_ 开头" autocomplete="off">
-  <button id="save">保存并测试连接</button>
+  <input id="token" placeholder="在新声簿「设置 → 连接与同步」生成，以 ar_ 开头" autocomplete="off">
+  <button id="save">保存并连接</button>
   <div id="connection" class="status" hidden></div>
 
-  <h2>定时刷新</h2>
-  <p class="muted">开关、时间和页面在 Album Relay 里设置。需要这台 Mac 开着 Chrome。</p>
+  <h2>每日巡检</h2>
+  <p class="muted">开关、时间与巡检页面在新声簿「设置 → 连接与同步」中配置，需保持 Chrome 开启。</p>
   <dl id="refresh"></dl>
-  <button id="run" class="secondary">立即执行一次</button>
+  <button id="run" class="secondary">立即巡检一次</button>
+  <button id="backfill" class="secondary">立即补抓详情页</button>
 
   <h2>最近收录</h2>
   <ol id="recent"><li class="muted">暂无</li></ol>

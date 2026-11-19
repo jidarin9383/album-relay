@@ -1,131 +1,1055 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ArrowDownToLine, ArrowRight, Check, ChevronRight, Disc3, ExternalLink, Headphones, History, LayoutDashboard, Library, ListMusic, LoaderCircle, LogOut, Menu, Play, Radio, RefreshCw, Search, Settings2, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
-import type { Album, ConnectionStatus, ListeningStatus, Overview, Playlist, Run, RunMode, Settings, SourceName, SourceStatus } from '../shared/types';
+import {
+  AlertTriangle,
+  ArrowDownToLine,
+  ArrowRight,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Disc3,
+  ExternalLink,
+  Library,
+  ListMusic,
+  LoaderCircle,
+  LogOut,
+  Menu,
+  Search,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  X
+} from 'lucide-react';
+import type { PersonalOverview } from '../shared/personal';
+import type {
+  AiSettings,
+  Album,
+  ConnectionStatus,
+  ExtensionState,
+  ListeningStatus,
+  MonthlyAiDraft,
+  Playlist,
+  Run,
+  Settings,
+  SourceName,
+  SourceStatus
+} from '../shared/types';
 import './style.css';
-import { CapturePanel } from './CapturePanel';
-import { ExtensionPanel } from './ExtensionPanel';
+import { AlbumCard } from './AlbumCard';
+import { ForYouPage, type NavPage, type SettingsTab } from './ForYouPage';
+import { SettingsPage } from './SettingsPage';
 
-type Page = 'overview' | 'albums' | 'rules' | 'connections' | 'runs' | 'playlists';
-const sourceNames: Record<SourceName, string> = { aoty: 'Album of the Year', rym: 'Rate Your Music', pitchfork: 'Pitchfork' };
+const editionPalettes = [
+  'linear-gradient(150deg, #181A20 0%, #2C1917 65%, #8F2515 100%)',
+  'linear-gradient(150deg, #12161F 0%, #1E293B 70%, #334155 100%)',
+  'linear-gradient(150deg, #161816 0%, #1F2E26 70%, #2B4738 100%)'
+];
+
 const sourceShort: Record<SourceName, string> = { aoty: 'AOTY', rym: 'RYM', pitchfork: 'Pitchfork' };
-const sources: SourceName[] = ['aoty', 'rym', 'pitchfork'];
-const decisionNames: Record<string, string> = { selected: '已入选', pending: '待观察', disagreement: '评分分歧', excluded: '手动排除', too_new: '等待口碑沉淀', out_of_window: '超出时间窗口', format_conflict: '非全长专辑 / 类型待确认' };
-const formatNames: Record<Album['format'], string> = { LP: 'LP', EP: 'EP', Reissue: '再版', Unknown: '类型待印证' };
-const listeningNames: Record<ListeningStatus, string> = { unheard: '未标记', saved: '想听', listened: '已听', liked: '喜欢', disliked: '无感', skipped: '跳过' };
-const listeningStatuses: ListeningStatus[] = ['unheard', 'saved', 'listened', 'liked', 'disliked', 'skipped'];
-const runStates: Record<string, string> = { queued: '排队中', running: '进行中', waiting_verification: '等待人工验证', partial: '部分完成', succeeded: '已完成', failed: '失败', cancelled: '已取消' };
-const modes: Record<RunMode, string> = { refresh: '历史服务端采集', preview: '历史全流程预览', library_preview: '生成歌单预览', sync: '同步歌单' };
-const active = (run: Run) => ['queued', 'running'].includes(run.status);
-const date = (value?: string | null) => value ? new Date(value).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '尚无记录';
+const activeRun = (run: Run) => ['queued', 'running'].includes(run.status);
+const formatDate = (value?: string | null) =>
+  value ? new Date(value).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+
 async function api<T>(path: string, body?: unknown, method?: string): Promise<T> {
-  const response = await fetch(`/api${path}`, { credentials: 'same-origin', method: method ?? (body === undefined ? 'GET' : 'POST'), headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const response = await fetch(`/api${path}`, {
+    credentials: 'same-origin',
+    method: method ?? (body === undefined ? 'GET' : 'POST'),
+    headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || `请求失败 (${response.status})`);
   return data as T;
 }
-function Spinner() { return <LoaderCircle size={16} className="spin" aria-hidden="true"/>; }
-function Pill({ children, tone = '' }: { children: React.ReactNode; tone?: string }) { return <span className={`pill ${tone}`}>{children}</span>; }
-function Empty({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) { return <div className="empty"><span className="empty-disc"><Disc3 size={32}/></span><h3>{title}</h3><p>{children}</p>{action}</div>; }
-function WorkflowSteps() { return <div className="workflow-strip" aria-label="三步工作流程"><div><span>① 收录评分</span><p>Chrome 打开 RYM / AOTY / Pitchfork 榜单或乐评页即自动收录（也可开启扩展每日自动刷新）</p></div><div><span>② 生成歌单预览</span><p>基于资料库已入选专辑匹配网易云音乐完整曲目</p></div><div><span>③ 同步歌单</span><p>核对预览曲目无误后写入当月网易云歌单</p></div></div>; }
-function Cover({ album }: { album: Album }) {
-  const src = album.coverUrl || `/api/albums/${encodeURIComponent(album.id)}/cover`;
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  return <div className="cover">{failedSrc !== src ? <img loading="lazy" referrerPolicy="no-referrer" src={src} alt="" onError={() => setFailedSrc(src)}/> : <div className="cover-placeholder"><Disc3 size={50}/><span>{album.artist}</span></div>}<span className="format">{formatNames[album.format]}</span></div>;
+
+function Spinner({ size = 16 }: { size?: number }) {
+  return <LoaderCircle size={size} className="spin" aria-hidden="true" />;
 }
+
+function Empty({
+  title,
+  children,
+  action
+}: {
+  title: string;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="editorial-panel" style={{ textAlign: 'center', padding: 'var(--sp-10)' }}>
+      <div className="od-stack" style={{ '--od-gap': '12px', alignItems: 'center' } as React.CSSProperties}>
+        <div
+          style={{
+            width: '52px',
+            height: '52px',
+            borderRadius: '50%',
+            background: 'var(--bg-subtle)',
+            display: 'grid',
+            placeItems: 'center',
+            color: 'var(--ink-tertiary)'
+          }}
+        >
+          <Disc3 size={24} />
+        </div>
+        <h3 className="cjk-heading" style={{ fontSize: 'var(--text-h3)' }}>
+          {title}
+        </h3>
+        <p className="field-hint" style={{ maxWidth: '420px', fontSize: 'var(--text-sm)' }}>
+          {children}
+        </p>
+        {action && <div style={{ marginTop: '4px' }}>{action}</div>}
+      </div>
+    </div>
+  );
+}
+
+function BrandEmblem() {
+  return (
+    <svg className="brand-emblem" width="36" height="36" viewBox="0 0 36 36" fill="none" role="img" aria-label="新声簿标志">
+      <rect width="36" height="36" rx="7" fill="#121316" />
+      <circle cx="18" cy="18" r="12.5" stroke="#F5F5F3" strokeOpacity="0.26" strokeWidth="1" />
+      <circle cx="18" cy="18" r="9.5" stroke="#F5F5F3" strokeOpacity="0.5" strokeWidth="1" strokeDasharray="3 2" />
+      <circle cx="18" cy="18" r="5.2" fill="#D6361F" />
+      <circle cx="18" cy="18" r="1.7" fill="#F6F6F4" />
+      <path d="M27.5 8.5L23 16" stroke="#F5F5F3" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function App() {
   const [session, setSession] = useState<{ authenticated: boolean; setupRequired: boolean } | null>(null);
-  const [page, setPage] = useState<Page>('overview');
-  const [overview, setOverview] = useState<Overview | null>(null);
+  const [page, setPage] = useState<NavPage>('foryou');
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('connect');
+
   const [albums, setAlbums] = useState<Album[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [connection, setConnection] = useState<ConnectionStatus | null>(null);
   const [sourceStatuses, setSourceStatuses] = useState<SourceStatus[]>([]);
+  const [extensionState, setExtensionState] = useState<ExtensionState | null>(null);
+  const [personal, setPersonal] = useState<PersonalOverview | null>(null);
+  const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
+  const [monthlyDraft, setMonthlyDraft] = useState<MonthlyAiDraft | null>(null);
+
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [mobileMenu, setMobileMenu] = useState(false);
-  const [syncConfirm, setSyncConfirm] = useState(false);
+  const [railCollapsed, setRailCollapsed] = useState(false);
+
+  const navigate = useCallback((nextPage: NavPage, nextTab?: SettingsTab) => {
+    setPage(nextPage);
+    if (nextTab) setSettingsTab(nextTab);
+    setMobileMenu(false);
+  }, []);
+
+  const loadPersonal = useCallback(async () => {
+    const p = await api<PersonalOverview>('/personal/overview');
+    setPersonal(p);
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [o, a, s, r, p, c, ss] = await Promise.all([api<Overview>('/overview'), api<Album[]>('/albums'), api<Settings>('/settings'), api<Run[]>('/runs'), api<Playlist[]>('/playlists'), api<ConnectionStatus>('/connection'), api<SourceStatus[]>('/sources')]);
-      setOverview(o); setAlbums(a); setSettings(s); setRuns(r); setPlaylists(p); setConnection(c); setSourceStatuses(ss);
-    } catch (e) { setError((e as Error).message); } finally { setLoading(false); }
+      const [a, s, r, p, c, ss, ext, pers, aiRes, draftRes] = await Promise.all([
+        api<Album[]>('/albums'),
+        api<Settings>('/settings'),
+        api<Run[]>('/runs'),
+        api<Playlist[]>('/playlists'),
+        api<ConnectionStatus>('/connection'),
+        api<SourceStatus[]>('/sources'),
+        api<ExtensionState>('/extension'),
+        api<PersonalOverview>('/personal/overview'),
+        api<{ settings: AiSettings }>('/ai'),
+        api<{ draft: MonthlyAiDraft | null }>('/playlists/draft')
+      ]);
+      setAlbums(a);
+      setSettings(s);
+      setRuns(r);
+      setPlaylists(p);
+      setConnection(c);
+      setSourceStatuses(ss);
+      setExtensionState(ext);
+      setPersonal(pers);
+      setAiSettings(aiRes.settings);
+      setMonthlyDraft(draftRes.draft);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
   }, []);
-  useEffect(() => { api<{ authenticated: boolean; setupRequired: boolean }>('/session').then(setSession).catch(e => setError(e.message)); }, []);
-  useEffect(() => { if (!session?.authenticated) return; void load(); const timer = window.setInterval(() => void load(), 15000); return () => window.clearInterval(timer); }, [session?.authenticated, load]);
-  const running = runs.find(active);
+
+  const updateAlbumInState = useCallback((updated: Album) => {
+    setAlbums((current) => current.map((a) => (a.id === updated.id ? updated : a)));
+  }, []);
+
+  useEffect(() => {
+    api<{ authenticated: boolean; setupRequired: boolean }>('/session')
+      .then(setSession)
+      .catch((e) => setError((e as Error).message));
+  }, []);
+
+  useEffect(() => {
+    if (!session?.authenticated) return;
+    void load();
+    const timer = window.setInterval(() => void load(), 15000);
+    return () => window.clearInterval(timer);
+  }, [session?.authenticated, load]);
+
+  const running = runs.find(activeRun);
   useEffect(() => {
     if (!running) return;
     const timer = window.setInterval(async () => {
-      try { const next = await api<Run>(`/runs/${running.id}`); setRuns(current => current.map(r => r.id === next.id ? next : r)); if (!active(next)) { void load(); setNotice(`${modes[next.mode]}：${runStates[next.status]}`); } } catch (e) { setError((e as Error).message); }
+      try {
+        const next = await api<Run>(`/runs/${running.id}`);
+        setRuns((current) => current.map((r) => (r.id === next.id ? next : r)));
+        if (!activeRun(next)) {
+          void load();
+          if (next.mode === 'auto_sync' && next.status === 'succeeded') {
+            setNotice(next.message || '当月歌单已同步。');
+          }
+        }
+      } catch (e) {
+        setError((e as Error).message);
+      }
     }, 2500);
     return () => clearInterval(timer);
   }, [running?.id, load]);
+
   useEffect(() => {
     if (connection?.loginState !== 'waiting') return;
-    const timer = window.setInterval(() => { api<ConnectionStatus>('/connection/check', {}).then(setConnection).catch(e => setError(e.message)); }, 3000);
+    const timer = window.setInterval(() => {
+      api<ConnectionStatus>('/connection/check', {})
+        .then(setConnection)
+        .catch((e) => setError((e as Error).message));
+    }, 3000);
     return () => clearInterval(timer);
   }, [connection?.loginState]);
-  const action = async (key: string, fn: () => Promise<void>) => { setBusy(key); setError(''); setNotice(''); try { await fn(); } catch (e) { setError((e as Error).message); } finally { setBusy(null); } };
-  const startRun = (mode: RunMode) => { setSyncConfirm(false); void action(mode, async () => { const run = await api<Run>('/runs', { mode }); setRuns(current => [run, ...current.filter(r => r.id !== run.id)]); setPage('runs'); if (!active(run)) await load(); }); };
-  const nav = [{ id: 'overview', label: '发现概览', icon: LayoutDashboard }, { id: 'albums', label: '专辑资料库', icon: Library }, { id: 'playlists', label: '月度歌单', icon: ListMusic }, { id: 'runs', label: '运行记录', icon: History }, { id: 'rules', label: '筛选与日程', icon: SlidersHorizontal }, { id: 'connections', label: '连接与来源', icon: Radio }] as const;
-  if (!session || !session.authenticated) return <Auth session={session} error={error} onSuccess={() => { setError(''); void api<{ authenticated: boolean; setupRequired: boolean }>('/session').then(setSession); }}/>;
-  return <div className="app-shell">
-    <aside className={`sidebar ${mobileMenu ? 'is-open' : ''}`}><a className="brand" href="#" onClick={e => { e.preventDefault(); setPage('overview'); }}><span className="brand-mark"><Disc3 size={29}/></span><span>新声簿<small>ALBUM RELAY</small></span></a><div className="sidebar-caption">YOUR LISTENING JOURNAL</div><nav aria-label="主导航">{nav.map(item => <button key={item.id} className={`nav-item ${page === item.id ? 'selected' : ''}`} onClick={() => { setPage(item.id); setMobileMenu(false); }}><item.icon size={18}/><span>{item.label}</span>{page === item.id && <span className="nav-dot"/>}</button>)}</nav><div className="sidebar-bottom"><div className="connection-indicator"><span className={`status-dot ${connection?.loggedIn ? 'ok' : ''}`}/>{connection?.loggedIn ? '网易云音乐已连接' : '网易云音乐未连接'}</div><p>好音乐，值得再传一程。</p><button className="text-button logout" onClick={() => void action('logout', async () => { await api('/logout', {}); setSession({ authenticated: false, setupRequired: false }); })}><LogOut size={14}/>退出登录</button></div></aside>
-    {mobileMenu && <button className="menu-scrim" aria-label="关闭导航" onClick={() => setMobileMenu(false)}/>}
-    <div className="main-shell"><header className="topbar"><button className="icon-button mobile-toggle" aria-label="打开导航" onClick={() => setMobileMenu(!mobileMenu)}><Menu size={21}/></button><span className="topbar-breadcrumb">音乐发现工作台 <ChevronRight size={13}/><b>{nav.find(n => n.id === page)?.label}</b></span><div className="header-actions"><button className="button quiet" disabled={!!busy || !!running} title="评估当前资料库中已入选的专辑，并匹配网易云音乐完整曲目" onClick={() => startRun('library_preview')}>{busy === 'library_preview' ? <Spinner/> : <Play size={14}/>}<span>生成歌单预览</span></button><button className="button primary" disabled={!!busy || !!running} title="将最近 30 分钟内已核验的歌单预览写入当月网易云歌单" onClick={() => setSyncConfirm(true)}><ArrowDownToLine size={15}/><span>同步歌单</span></button></div></header>
-    <main>{error && <div className="banner error" role="alert"><span>{error}</span><button aria-label="关闭错误" onClick={() => setError('')}><X size={17}/></button></div>}{notice && <div className="banner success" role="status"><Check size={17}/><span>{notice}</span><button aria-label="关闭提示" onClick={() => setNotice('')}><X size={17}/></button></div>}
-      {running && page !== 'runs' && <button className="running-banner" onClick={() => setPage('runs')}><Spinner/><span>{modes[running.mode]} · {running.message || running.stage}</span><ArrowRight size={16}/></button>}
-      {loading && !overview ? <div className="page-loading"><Spinner/>正在打开你的音乐资料库…</div> : <>
-      {page === 'overview' && <OverviewPage overview={overview} albums={albums} go={setPage}/>}
-      {page === 'albums' && <AlbumsPage albums={albums} exclude={album => void action(`exclude-${album.id}`, async () => { const updated = await api<Album>(`/albums/${encodeURIComponent(album.id)}/exclude`, { excluded: !album.excluded }); setAlbums(current => current.map(a => a.id === album.id ? updated : a)); await load(); })} setStatus={(album, listeningStatus) => void action(`status-${album.id}`, async () => { const updated = await api<Album>(`/albums/${encodeURIComponent(album.id)}/status`, { listeningStatus }); setAlbums(current => current.map(a => a.id === album.id ? updated : a)); })} setFormat={(album, format) => void action(`format-${album.id}`, async () => { const updated = await api<Album>(`/albums/${encodeURIComponent(album.id)}/format`, { format }); setAlbums(current => current.map(a => a.id === album.id ? updated : a)); await load(); })} busy={busy} previewLibrary={() => startRun('library_preview')} runBusy={!!busy || !!running}/>}
-      {page === 'rules' && settings && <RulesPage settings={settings} busy={busy === 'settings'} save={value => void action('settings', async () => { setSettings(await api<Settings>('/settings', value, 'PUT')); await load(); setNotice('筛选规则与日程已保存。'); })}/>}
-      {page === 'connections' && <><ExtensionPanel request={api} onChanged={load}/><CapturePanel request={api} onCaptured={load} onPreviewLibrary={() => startRun('library_preview')} runBusy={!!busy || !!running}/><ConnectionsPage connection={connection} statuses={sourceStatuses} settings={settings} busy={busy} action={action} setConnection={setConnection} notify={setNotice}/></>}
-      {page === 'runs' && <RunsPage runs={runs} sync={() => setSyncConfirm(true)} busy={!!busy || !!running}/>}
-      {page === 'playlists' && <PlaylistsPage playlists={playlists} go={setPage}/>}
-      </>}
-      <footer className="page-footer"><span>新声簿 / ALBUM RELAY</span><span>让口碑带路，让音乐发生。</span><span>PRIVATE LISTENING CLUB</span></footer>
-    </main></div>
-    {syncConfirm && <div className="modal-backdrop" onClick={() => setSyncConfirm(false)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="sync-title" onClick={e => e.stopPropagation()}><span className="eyebrow">SEND IT TO YOUR LIBRARY</span><h2 id="sync-title">把入选专辑送进歌单</h2><p>将基于最近一次「生成歌单预览」的核验结果，创建或更新对应月份的网易云歌单。已有曲目会去重保留。</p>{!runs.some(r => (r.mode === 'preview' || r.mode === 'library_preview') && r.status === 'succeeded') && <div className="inline-note">尚无成功的预览记录，建议先点击「先生成歌单预览」匹配曲目并核对清单。</div>}<div className="modal-actions"><button className="button" autoFocus onClick={() => setSyncConfirm(false)}>暂不操作</button><button className="button" onClick={() => startRun('library_preview')}>先生成歌单预览</button><button className="button primary" onClick={() => startRun('sync')}>确认同步 <ArrowRight size={15}/></button></div></section></div>}
-  </div>;
-}
-function Auth({ session, error: initialError, onSuccess }: { session: { authenticated: boolean; setupRequired: boolean } | null; error: string; onSuccess: () => void }) {
-  const [password, setPassword] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
-  return <div className="auth-layout"><div className="auth-editorial"><span className="auth-wordmark">ALBUM<br/>RELAY<span>®</span></span><div className="auth-record"><div/><span>33⅓<br/>NEW SOUNDS / GOOD FINDS</span></div><div className="auth-caption"><span>跨越评分，抵达耳边。</span><p>A private journal for your next favorite record.</p></div></div><div className="auth-panel"><a className="brand"><span className="brand-mark"><Disc3 size={26}/></span><span>新声簿<small>ALBUM RELAY</small></span></a><form onSubmit={async e => { e.preventDefault(); setBusy(true); setError(''); try { await api(session?.setupRequired ? '/setup' : '/login', { password }); onSuccess(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } }}><span className="eyebrow">YOUR NEXT FAVORITE RECORD</span><h1>{session?.setupRequired ? '为好音乐，留个位置。' : '欢迎回来。'}</h1><p>{session?.setupRequired ? '设置管理员密码，开启你的私人音乐发现工作台。' : '登录你的私人音乐资料库，继续发现值得一听的新声音。'}</p>{(error || initialError) && <div className="banner error" role="alert">{error || initialError}</div>}<label htmlFor="password">{session?.setupRequired ? '设置管理员密码' : '管理员密码'}</label><input id="password" type="password" autoComplete={session?.setupRequired ? 'new-password' : 'current-password'} minLength={session?.setupRequired ? 12 : 1} placeholder={session?.setupRequired ? '至少 12 个字符' : '输入密码'} required value={password} onChange={e => setPassword(e.target.value)}/><button className="button primary auth-submit" disabled={busy || !session}>{busy ? <Spinner/> : null}{session?.setupRequired ? '创建我的新声簿' : '进入新声簿'}<ArrowRight size={17}/></button><div className="auth-security"><ShieldCheck size={15}/> 独立部署 · 私人资料库 · 由你掌控</div></form><small className="auth-bottom">GOOD RECORDS DESERVE A SECOND LISTEN.</small></div></div>;
-}
-function PageTitle({ label, title, description, aside }: { label: string; title: string; description: string; aside?: React.ReactNode }) { return <div className="page-heading"><div><span className="eyebrow">{label}</span><h1>{title}<span className="heading-period">.</span></h1><p>{description}</p></div>{aside}</div>; }
-function OverviewPage({ overview, albums, go }: { overview: Overview | null; albums: Album[]; go: (p: Page) => void }) {
-  const selected = albums.filter(a => a.decision?.status === 'selected' && !a.excluded).slice(0, 4);
-  return <><PageTitle label="THE LISTENING ROOM" title="下一张好专辑，在这里" description="汇合乐评与听众口碑，把值得反复聆听的新声音收入每月歌单。" aside={<div className="edition-mark"><span>THE NEW</span><strong>SOUNDS</strong><span>精选 · 发现 · 收听</span></div>}/><WorkflowSteps/><div className="stats-grid">{[{ label: '已收录专辑', value: overview?.albums ?? 0, foot: '你的新声资料库' }, { label: '规则入选', value: overview?.selected ?? 0, foot: '等待匹配与同步' }, { label: '待观察', value: overview?.pending ?? 0, foot: '让口碑再沉淀一会儿' }, { label: '评分分歧', value: overview?.disagreements ?? 0, foot: '保留不同的声音' }].map((s, i) => <div className={`stat ${i === 1 ? 'featured' : ''}`} key={s.label}><span>{s.label}</span><strong>{String(s.value).padStart(2, '0')}<small>{i === 1 ? <ArrowRight size={20}/> : null}</small></strong><p>{s.foot}</p></div>)}</div>
-  <section className="section"><div className="section-heading"><div><span className="eyebrow">ON THE SHORTLIST</span><h2>值得按下播放</h2></div><button className="text-button" onClick={() => go('albums')}>全部专辑 <ArrowRight size={15}/></button></div>{selected.length ? <div className="album-grid">{selected.map(album => <AlbumCard key={album.id} album={album}/>)}</div> : <div className="welcome-panel"><div className="welcome-art" aria-hidden="true"><span className="record-sleeve"/><span className="record-vinyl"/><span className="record-label">SIDE A<br/>NEW<br/>BEGINNINGS</span></div><div className="welcome-copy"><span className="eyebrow">A FRESH START</span><h2>好音乐的接力，从这里开始。</h2><p>连接网易云并在 Chrome 安装扩展后，打开 RYM / AOTY / Pitchfork 榜单或乐评页即可自动收录；最后点击「生成歌单预览」并同步到网易云。</p><div className="welcome-steps"><button onClick={() => go('connections')}><span>01</span>连接网易云与浏览器扩展 <ArrowRight size={15}/></button><button onClick={() => go('rules')}><span>02</span>查看筛选规则 <ArrowRight size={15}/></button></div></div></div>}</section>
-  <div className="overview-bottom"><section className="panel"><div className="section-heading"><h3>口碑从哪里来</h3><button className="text-button" onClick={() => go('connections')}>管理 <ArrowRight size={14}/></button></div>{sources.map(source => { const status = overview?.sourceStatuses.find(s => s.source === source); return <div className="source-row" key={source}><span className={`source-logo ${source}`}>{source === 'pitchfork' ? 'Pf.' : source.toUpperCase()}</span><div><b>{sourceNames[source]}</b><p>{status?.message || '尚未检查来源状态'}</p></div><span className={`status-dot ${status?.status === 'ok' ? 'ok' : ''}`}/></div>; })}</section><section className="panel schedule-panel"><span className="eyebrow">KEEP THE MUSIC COMING</span><h3>留一点时间，给新声音。</h3><p>下次计划运行</p><strong>{overview?.nextRun ? date(overview.nextRun) : '尚未启用自动运行'}</strong><div className="hairline"/><p>最近运行：{overview?.lastRun ? `${modes[overview.lastRun.mode]} · ${runStates[overview.lastRun.status]}` : '尚无运行记录'}</p><button className="text-button" onClick={() => go('rules')}>调整筛选与日程 <ArrowRight size={15}/></button></section></div></>;
-}
-function AlbumCard({ album }: { album: Album }) { return <article className="album-card"><Cover album={album}/><div className="album-meta"><span>{album.releaseDate || '日期待印证'} <span className="meta-separator">/</span> {album.genres.slice(0, 2).join(' · ') || '风格待补充'}</span><h3>{album.title}</h3><p>{album.artist}</p></div><div className="mini-scores">{sources.map(source => { const observation = album.sources.find(s => s.source === source); return <span key={source}><small>{sourceShort[source]}</small><b>{observation?.score ?? '—'}</b></span>; })}</div></article>; }
-function AlbumsPage({ albums, exclude, setStatus, setFormat, busy, previewLibrary, runBusy }: { albums: Album[]; exclude: (a: Album) => void; setStatus: (a: Album, s: ListeningStatus) => void; setFormat: (a: Album, f: Album['format']) => void; busy: string | null; previewLibrary: () => void; runBusy: boolean }) {
-  const [query, setQuery] = useState(''); const [filter, setFilter] = useState('all'); const [sourceFilter, setSourceFilter] = useState<'all' | SourceName>('all'); const [listeningFilter, setListeningFilter] = useState<'all' | ListeningStatus>('all'); const [expanded, setExpanded] = useState<string | null>(null);
-  const visible = albums.filter(a => `${a.artist} ${a.title} ${a.genres.join(' ')}`.toLowerCase().includes(query.toLowerCase()) && (filter === 'all' || (filter === 'excluded' ? a.excluded : !a.excluded && a.decision?.status === filter)) && (sourceFilter === 'all' || a.sources.some(s => s.source === sourceFilter && s.status === 'ok' && s.score !== null)) && (listeningFilter === 'all' || (a.listeningStatus ?? 'unheard') === listeningFilter));
-  return <><PageTitle label="THE RECORD COLLECTION" title="专辑资料库" description="每一份评分都有出处，每一次入选都能回看理由。" aside={<div className="collection-aside"><span className="count-tag">{albums.length} RECORDS</span>{albums.length > 0 && <button className="button" disabled={runBusy} onClick={previewLibrary}><Play size={14}/>生成歌单预览</button>}</div>}/><div className="filterbar"><div className="tabs" role="group" aria-label="专辑状态筛选">{[['all', '全部'], ['selected', '已入选'], ['pending', '待观察'], ['disagreement', '有分歧'], ['excluded', '已排除']].map(([id, label]) => <button key={id} className={filter === id ? 'active' : ''} onClick={() => setFilter(id!)}>{label}</button>)}</div><div className="filterbar-controls"><select className="filter-select" aria-label="按评分来源筛选" value={sourceFilter} onChange={e => setSourceFilter(e.target.value as 'all' | SourceName)}><option value="all">全部来源</option>{sources.map(s => <option key={s} value={s}>{sourceShort[s]}</option>)}</select><select className="filter-select" aria-label="按听歌状态筛选" value={listeningFilter} onChange={e => setListeningFilter(e.target.value as 'all' | ListeningStatus)}><option value="all">全部听歌状态</option>{listeningStatuses.map(s => <option key={s} value={s}>{listeningNames[s]}</option>)}</select><label className="search"><Search size={17}/><input aria-label="搜索专辑、艺人或风格" placeholder="搜索专辑、艺人、风格…" value={query} onChange={e => setQuery(e.target.value)}/></label></div></div>{!visible.length ? <Empty title={albums.length ? '没有找到匹配的专辑' : '资料库还在等待第一张专辑'}>{albums.length ? '试试其他搜索词或筛选条件。' : '在 Chrome 打开 RYM / AOTY / Pitchfork 榜单或乐评页，扩展会自动收录专辑评分。'}</Empty> : <div className="album-table"><div className="album-table-head"><span>专辑 / 艺人</span>{sources.map(s => <span key={s}>{sourceShort[s]}</span>)}<span>筛选结果</span><span/></div>{visible.map(album => <React.Fragment key={album.id}><div className={`album-table-row ${album.excluded ? 'excluded' : ''}`}><button className="album-cell" onClick={() => setExpanded(expanded === album.id ? null : album.id)} aria-expanded={expanded === album.id}><Cover album={album}/><div><b>{album.title}</b><span>{album.artist}</span><small>{album.releaseDate || '日期待印证'} · {formatNames[album.format]}</small></div></button>{sources.map(source => { const s = album.sources.find(s => s.source === source); return <div className="score-cell" key={source}><b>{s?.score ?? '—'}{s?.score != null && <small>/{s.scale}</small>}</b><span>{s?.votes != null ? `${s.votesApproximate ? "约 " : ""}${s.votesDisplay || s.votes.toLocaleString()} 票` : s?.bestNewMusic ? 'Best New Music' : '票数未提供'}</span>{s?.url && <a href={s.url} target="_blank" rel="noreferrer" aria-label={`查看 ${sourceShort[source]} 评分来源`}><ExternalLink size={11}/></a>}</div>; })}<div className="decision-cell"><Pill tone={album.excluded ? '' : album.decision?.status === 'selected' ? 'green' : album.decision?.status === 'disagreement' ? 'orange' : ''}>{album.excluded ? '手动排除' : decisionNames[album.decision?.status || 'pending']}</Pill>{album.listeningStatus && album.listeningStatus !== 'unheard' && <Pill>{listeningNames[album.listeningStatus]}</Pill>}{album.format === 'Unknown' && <select className="format-select" aria-label={`设置 ${album.title} 的发行类型`} disabled={busy === `format-${album.id}`} value={album.format} onChange={e => setFormat(album, e.target.value as Album['format'])}><option value="Unknown">类型待印证</option><option value="LP">确认为 LP</option><option value="EP">标记为 EP</option><option value="Reissue">标记为再版</option></select>}<button className="text-button" onClick={() => setExpanded(expanded === album.id ? null : album.id)}>{expanded === album.id ? '收起依据' : '查看依据'}<ChevronRight size={12}/></button></div><button className="icon-button" aria-label={album.excluded ? `恢复 ${album.title}` : `排除 ${album.title}`} disabled={busy === `exclude-${album.id}`} onClick={() => exclude(album)}>{busy === `exclude-${album.id}` ? <Spinner/> : album.excluded ? <RefreshCw size={16}/> : <X size={16}/>}</button></div>{expanded === album.id && <div className="album-detail"><div><span className="eyebrow">WHY THIS RECORD</span><h4>筛选依据</h4>{album.decision?.reasons.length ? <ul>{album.decision.reasons.map((r, i) => <li key={i}>{r}</li>)}</ul> : <p>尚无筛选说明，请重新收录以更新判断。</p>}{album.rationale && <p>{album.rationale}</p>}{album.sources.filter(s=>s.collectionMethod).map(s=><p key={s.source}>{sourceShort[s.source]} · 浏览器收录 · {date(s.observedAt)}{s.votesApproximate ? " · 票数为近似值" : ""}</p>)}<div className="format-section"><span className="eyebrow">FORMAT</span><select className="format-select" aria-label={`更改 ${album.title} 的发行类型`} disabled={busy === `format-${album.id}`} value={album.format} onChange={e => setFormat(album, e.target.value as Album['format'])}><option value="Unknown">类型待印证</option><option value="LP">确认为 LP</option><option value="EP">标记为 EP</option><option value="Reissue">标记为再版</option></select></div></div><div><span className="eyebrow">MUSIC MATCH</span><h4>网易云音乐匹配</h4><p>{album.match ? `${album.match.artist} — ${album.match.name}` : '尚未匹配。点击「生成歌单预览」后可查看匹配结果。'}</p>{album.match && <span>{album.match.tracks.length} 首曲目 · {album.match.releaseDate}</span>}{album.admittedMonth && <p>入选月份：{album.admittedMonth}</p>}<div className="listening-section"><span className="eyebrow">LISTENING LOG</span><h4>听歌状态</h4><div className="listening-pills">{listeningStatuses.map(st => <button key={st} className={`button ${(album.listeningStatus ?? 'unheard') === st ? 'primary' : ''}`} disabled={busy === `status-${album.id}`} onClick={() => setStatus(album, st)}>{listeningNames[st]}</button>)}</div></div></div></div>}</React.Fragment>)}</div>}<div className="list-footnote">共显示 {visible.length} 张专辑 <span>— 表示尚无有效评分，不参与合格来源计数。</span></div></>;
-}
-function NumberField({ label, value, onChange, min = 0, max, step = 1, hint }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; hint?: string }) { return <label className="field"><span>{label}</span><input type="number" required min={min} max={max} step={step} value={value} onChange={e => onChange(Number(e.target.value))}/>{hint && <small>{hint}</small>}</label>; }
-function RulesPage({ settings, save, busy }: { settings: Settings; save: (s: Settings) => void; busy: boolean }) {
-  const [draft, setDraft] = useState(settings); useEffect(() => setDraft(settings), [settings]);
-  const threshold = (source: SourceName, key: string, value: number | boolean) => setDraft(d => ({ ...d, thresholds: { ...d.thresholds, [source]: { ...d.thresholds[source], [key]: value } } }));
-  return <><PageTitle label="THE CURATOR'S NOTES" title="把你的品味，写成规则" description="先设门槛，再给口碑一点时间。只让符合条件的专辑进入月度歌单。"/><form onSubmit={e => { e.preventDefault(); save(draft); }}><section className="settings-section"><div className="settings-intro"><span className="section-number">01 /</span><h2>评分门槛</h2><p>至少满足指定数量的来源。低分反对线用于识别口碑分歧，避免只看最高分。</p></div><div className="settings-content">{sources.map(source => <div className="threshold-row" key={source}><div className="threshold-title"><label className="check-label"><input type="checkbox" checked={draft.sources[source]} onChange={e => setDraft(d => ({ ...d, sources: { ...d.sources, [source]: e.target.checked } }))}/><strong>{sourceShort[source]}</strong></label><small>{sourceNames[source]}</small></div><NumberField label="入选分数 ≥" value={draft.thresholds[source].score} max={source === 'aoty' ? 100 : source === 'rym' ? 5 : 10} step={source === 'aoty' ? 1 : 0.1} onChange={v => threshold(source, 'score', v)}/>{source !== 'pitchfork' ? <NumberField label="最低票数" value={draft.thresholds[source].votes} onChange={v => threshold(source, 'votes', v)}/> : <label className="check-label bnm"><input type="checkbox" checked={draft.thresholds.pitchfork.allowBnm} onChange={e => threshold(source, 'allowBnm', e.target.checked)}/>接受 Best New Music</label>}<NumberField label="低分反对线 <" value={draft.thresholds[source].negative} max={source === 'aoty' ? 100 : source === 'rym' ? 5 : 10} step={source === 'aoty' ? 1 : 0.1} onChange={v => threshold(source, 'negative', v)}/></div>)}<label className="check-label schedule-check"><input type="checkbox" checked={draft.allowApproximateVotes ?? false} onChange={e => setDraft(d => ({ ...d, allowApproximateVotes: e.target.checked }))}/><strong>允许近似票数参与筛选</strong></label><p className="muted">例如 RYM 榜单的 6k 是约 6000 票。关闭时，近似票数不满足非零的最低票数条件。</p><div className="field-grid three"><NumberField label="最少合格来源" value={draft.minSources} min={1} max={3} onChange={v => setDraft(d => ({ ...d, minSources: v }))}/><NumberField label="回溯天数" value={draft.lookbackDays} min={1} onChange={v => setDraft(d => ({ ...d, lookbackDays: v }))}/><NumberField label="发行后等待天数" value={draft.minimumAgeDays} onChange={v => setDraft(d => ({ ...d, minimumAgeDays: v }))}/></div></div></section><section className="settings-section"><div className="settings-intro"><span className="section-number">02 /</span><h2>运行日程</h2><p>按计划采集与同步。请确认时区，避免错过你希望更新歌单的时刻。</p></div><div className="settings-content"><label className="check-label schedule-check"><input type="checkbox" checked={draft.schedule.enabled} onChange={e => setDraft(d => ({ ...d, schedule: { ...d.schedule, enabled: e.target.checked } }))}/><strong>开启自动运行</strong><span className="muted">{draft.schedule.enabled ? '已启用' : '仅手动运行'}</span></label><div className="field-grid three"><label className="field"><span>每周</span><select value={draft.schedule.weekday} onChange={e => setDraft(d => ({ ...d, schedule: { ...d.schedule, weekday: Number(e.target.value) } }))}>{['周日', '周一', '周二', '周三', '周四', '周五', '周六'].map((w, i) => <option value={i} key={w}>{w}</option>)}</select></label><label className="field"><span>运行时间</span><input type="time" required value={`${String(draft.schedule.hour).padStart(2, '0')}:${String(draft.schedule.minute).padStart(2, '0')}`} onChange={e => { const [hour, minute] = e.target.value.split(':').map(Number); setDraft(d => ({ ...d, schedule: { ...d.schedule, hour: hour ?? 0, minute: minute ?? 0 } })); }}/></label><label className="field"><span>时区</span><input required value={draft.schedule.timezone} onChange={e => setDraft(d => ({ ...d, schedule: { ...d.schedule, timezone: e.target.value } }))} placeholder="Asia/Shanghai"/></label></div></div></section><section className="settings-section"><div className="settings-intro"><span className="section-number">03 /</span><h2>歌单与采集</h2><p>月度归档让每次发现都有位置。采集间隔有助于减轻评分来源的访问负担。</p></div><div className="settings-content"><label className="field"><span>月度歌单名称模板</span><input required value={draft.playlist.namePattern} onChange={e => setDraft(d => ({ ...d, playlist: { ...d.playlist, namePattern: e.target.value } }))}/><small>保留月份占位符以区分每个月的歌单。</small></label><div className="field-grid two"><NumberField label="歌单描述最大字数" value={draft.playlist.descriptionMaxChars} min={1} onChange={v => setDraft(d => ({ ...d, playlist: { ...d.playlist, descriptionMaxChars: v } }))}/><NumberField label="采集请求间隔（毫秒）" value={draft.requestDelayMs} min={6000} step={100} onChange={v => setDraft(d => ({ ...d, requestDelayMs: v }))}/></div></div></section><div className="save-bar"><span><ShieldCheck size={16}/> 保存后用于后续采集与同步。</span><button className="button primary" disabled={busy}>{busy ? <Spinner/> : <Check size={16}/>}保存规则与日程</button></div></form></>;
-}
-function ConnectionsPage({ connection, statuses, busy, action, setConnection, notify }: { connection: ConnectionStatus | null; statuses: SourceStatus[]; settings: Settings | null; busy: string | null; action: (key: string, fn: () => Promise<void>) => Promise<void>; setConnection: (c: ConnectionStatus) => void; notify: (s: string) => void }) {
-  const [appId, setAppId] = useState(''); const [privateKey, setPrivateKey] = useState('');
-  const connectionAction = (command: string) => void action(command, async () => setConnection(await api<ConnectionStatus>(`/connection/${command}`, {})));
-  return <><PageTitle label="CONNECTED TO THE MUSIC" title="接通你的音乐世界" description="网易云负责播放，评分来源负责发现。所有连接状态都在这里。"/><section className="connection-card"><div className="connection-card-title"><div className="netease-symbol"><Headphones size={30}/></div><div><span className="eyebrow">DESTINATION / 01</span><h2>网易云音乐</h2></div><Pill tone={connection?.loggedIn ? 'green' : ''}>{connection?.loggedIn ? '已连接' : connection?.configured ? '等待登录' : '未配置'}</Pill></div><p className="connection-message">{connection?.message || '先配置开发者凭据，再扫码登录网易云音乐账号。'}</p>{!connection?.loggedIn && <details className="credentials" open={!connection?.configured}><summary>开发者凭据 <span>{connection?.configured ? '已配置 · 可重新设置' : '首次连接需要配置'}</span></summary><form onSubmit={e => { e.preventDefault(); void action('configure', async () => { setConnection(await api<ConnectionStatus>('/connection/configure', { appId, privateKey })); setPrivateKey(''); setAppId(''); notify('开发者凭据已保存。'); }); }}><div className="field-grid two"><label className="field"><span>App ID</span><input required value={appId} onChange={e => setAppId(e.target.value)} autoComplete="off"/></label><label className="field"><span>私钥</span><textarea required value={privateKey} onChange={e => setPrivateKey(e.target.value)} placeholder="粘贴开发者私钥" rows={4} autoComplete="off"/><small>私钥仅用于配置，不会回显已保存内容。</small></label></div><button className="button" disabled={busy === 'configure'}>{busy === 'configure' && <Spinner/>}保存开发者配置</button></form></details>}{connection?.qrCodeUrl && connection.loginState === 'waiting' && <div className="qr-panel"><img src={connection.qrCodeUrl} alt="网易云音乐登录二维码"/><div><h3>用网易云音乐 App 扫码</h3><p>在手机上确认授权后，这里会自动更新登录状态。</p><button className="text-button" onClick={() => connectionAction('cancel')}>关闭二维码</button></div></div>}<div className="connection-actions"><button className="button primary" disabled={!connection?.configured || !!busy} onClick={() => connectionAction(connection?.loggedIn ? 'check' : 'login')}>{busy === 'login' || busy === 'check' ? <Spinner/> : <Radio size={16}/>} {connection?.loggedIn ? '检查连接' : '扫码登录'}</button>{connection?.configured && !connection.loggedIn && connection.loginState === 'waiting' && <button className="button" disabled={!!busy} onClick={() => connectionAction('check')}>我已扫码，检查状态</button>}{!connection?.loggedIn && connection?.loginState !== 'waiting' && <button className="button" disabled={!!busy} onClick={() => connectionAction('check')}>检查已有连接</button>}</div></section><div className="section-heading sources-heading"><div><span className="eyebrow">THE CRITICAL CONSENSUS</span><h2>评分来源</h2></div><span className="muted">RYM / AOTY / Pitchfork 均由浏览器扩展在你的 Chrome 中自动收录；遇到站点验证时由你亲自完成。</span></div><div className="sources-grid">{sources.map(source => { const status = statuses.find(s => s.source === source); return <section className="source-card" key={source}><div className="source-card-top"><span className={`source-logo ${source}`}>{source === 'pitchfork' ? 'Pf.' : source.toUpperCase()}</span><Pill tone={status?.status === 'ok' ? 'green' : status?.status === 'blocked' || status?.status === 'error' ? 'orange' : ''}>{({ ok: '可访问', blocked: '需要验证', error: '检查失败', missing: '暂无数据', running: '检查中', unknown: '未检查' })[status?.status || 'unknown']}</Pill></div><h3>{sourceNames[source]}</h3><p>{status?.message || '尚未检查来源状态。'}</p>{status?.coverage && <p className="source-coverage">{status.coverage}</p>}<small>上次检查：{date(status?.checkedAt)}</small></section>; })}</div></>;
-}
-function RunsPage({ runs, sync, busy }: { runs: Run[]; sync: () => void; busy: boolean }) {
-  const [selected, setSelected] = useState<string | null>(null); const run = runs.find(r => r.id === selected) || runs[0];
-  return <><PageTitle label="BEHIND EVERY PLAYLIST" title="每一程，都有记录" description="生成歌单预览与同步到网易云，查看每一步发生了什么。" aside={<span className="count-tag">{runs.length} RUNS</span>}/><WorkflowSteps/>{!runs.length ? <Empty title="还没有运行记录">先在 Chrome 收录 RYM / AOTY / Pitchfork 页面，然后点击右上角「生成歌单预览」查看即将加入歌单的曲目。</Empty> : <div className="runs-layout"><div className="run-list">{runs.map(r => <button className={`run-item ${run?.id === r.id ? 'selected' : ''}`} key={r.id} onClick={() => setSelected(r.id)}><div><b>{modes[r.mode]}</b><Pill tone={r.status === 'succeeded' ? 'green' : r.status === 'failed' || r.status === 'partial' ? 'orange' : ''}>{active(r) && <Spinner/>}{runStates[r.status]}</Pill></div><time>{date(r.startedAt)}</time><p>{r.message || r.stage}</p></button>)}</div>{run && <section className="run-detail panel"><div className="section-heading"><div><span className="eyebrow">RUN DETAILS</span><h2>{modes[run.mode]}</h2></div><Pill tone={run.status === 'succeeded' ? 'green' : ''}>{runStates[run.status]}</Pill></div><div className="run-stage">{active(run) ? <Spinner/> : <Check size={17}/>}<div><strong>{run.stage || runStates[run.status]}</strong><p>{run.message}</p></div></div><div className="run-times"><span>开始 {date(run.startedAt)}</span><span>结束 {run.finishedAt ? date(run.finishedAt) : '尚未结束'}</span></div>{run.preview && <div className="preview-panel"><span className="eyebrow">THE NEXT PLAYLIST</span><h3>{run.preview.playlistName}</h3><div className="preview-counts"><strong>{run.preview.albums.length}<small>张候选专辑</small></strong><strong>{run.preview.trackCount}<small>首预览曲目</small></strong></div><p>{run.preview.existingPlaylist ? '将更新已有月度歌单' : '将新建月度歌单'} · 预览不代表同步成功</p>{run.preview.warnings.map((w, i) => <div className="inline-note" key={i}>{w}</div>)}<div className="preview-albums">{run.preview.albums.map(a => <div key={a.id}><Disc3 size={14}/><span>{a.artist} — {a.title}</span><small>{a.match ? `${a.match.tracks.length} 首` : '未匹配'}</small></div>)}</div><button className="button primary" disabled={busy} onClick={sync}><ArrowDownToLine size={15}/>同步歌单</button></div>}<h4 className="log-heading">运行日志 <span>{run.logs.length} 条</span></h4><div className="run-log" role="log" aria-live="polite">{run.logs.length ? run.logs.map((log, i) => <div className={`log-line ${log.level}`} key={i}><time>{new Date(log.at).toLocaleTimeString('zh-CN')}</time><span>{log.message}</span></div>) : <p className="muted">等待任务写入第一条日志…</p>}</div></section>}</div>}</>;
-}
-function PlaylistsPage({ playlists, go }: { playlists: Playlist[]; go: (p: Page) => void }) { return <><PageTitle label="A MONTH IN RECORDS" title="把发现，留成歌单" description="按月收好新的声音，也留住那个月的听觉记忆。" aside={<span className="count-tag">{playlists.length} EDITIONS</span>}/>{!playlists.length ? <Empty title="第一期月度歌单，等你编选" action={<button className="button" onClick={() => go('runs')}>查看同步记录 <ArrowRight size={15}/></button>}>同步成功的歌单会出现在这里。先收录专辑评分、生成歌单预览，再把音乐送到网易云。</Empty> : <div className="playlists-grid">{playlists.map((p, i) => <article className="playlist-card" key={p.id}><div className={`playlist-art art-${i % 3}`}><span>ALBUM RELAY<br/>MONTHLY SELECTION</span><div className="playlist-grooves"/><strong>{p.month}</strong><small>新声簿 / {String(i + 1).padStart(2, '0')}</small></div><div className="playlist-card-content"><Pill tone="green">已同步</Pill><h2>{p.name}</h2><p>{p.albumIds.length} 张专辑 <span>·</span> {p.trackCount} 首曲目</p><div className="playlist-card-bottom"><small>更新于 {date(p.updatedAt)}</small><a href={p.url} target="_blank" rel="noreferrer" className="text-button">去听听 <ExternalLink size={14}/></a></div></div></article>)}</div>}</>; }
 
-createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);
+  const runAction = async (key: string, fn: () => Promise<void>) => {
+    setBusy(key);
+    setError('');
+    try {
+      await fn();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleStatus = (album: Album, listeningStatus: ListeningStatus) => {
+    void runAction(`status-${album.id}`, async () => {
+      const updated = await api<Album>(`/albums/${encodeURIComponent(album.id)}/status`, { listeningStatus });
+      updateAlbumInState(updated);
+      void loadPersonal();
+    });
+  };
+
+  const handleToggleExclude = (album: Album) => {
+    void runAction(`exclude-${album.id}`, async () => {
+      const updated = await api<Album>(`/albums/${encodeURIComponent(album.id)}/exclude`, {
+        excluded: !album.excluded
+      });
+      updateAlbumInState(updated);
+      void loadPersonal();
+    });
+  };
+
+  const handleSyncNow = () => {
+    void runAction('auto_sync', async () => {
+      const run = await api<Run>('/runs', { mode: 'auto_sync' });
+      setRuns((current) => [run, ...current.filter((r) => r.id !== run.id)]);
+      setNotice('已开始同步当月网易云歌单，请稍候…');
+      if (!activeRun(run)) await load();
+    });
+  };
+
+  const handlePreviewMonthlyAi = () => {
+    void runAction('preview-monthly-ai', async () => {
+      const res = await api<{ draft: MonthlyAiDraft }>('/playlists/preview-ai', {});
+      setMonthlyDraft(res.draft);
+      setNotice('已生成本月 AI 选单把关与连贯简介预览（尚未写入网易云）。');
+    });
+  };
+
+  const selectedCount = albums.filter((a) => !a.excluded && a.decision?.status === 'selected').length;
+  const blockedSources = sourceStatuses.filter((s) => s.status === 'blocked');
+  const blockedChallenges = extensionState?.reports.filter((r) => r.state === 'challenge') ?? [];
+
+  const mainNav = [
+    { id: 'foryou', label: '为你推荐', icon: Sparkles, count: undefined },
+    { id: 'albums', label: '全部新专', icon: Library, count: selectedCount || undefined },
+    { id: 'playlists', label: '月度歌单', icon: ListMusic, count: playlists.length || undefined }
+  ] as const;
+
+  const pageLabels: Record<NavPage, string> = {
+    foryou: '为你推荐',
+    albums: '全部新专',
+    playlists: '月度歌单',
+    settings: '设置'
+  };
+
+  if (!session || !session.authenticated) {
+    return (
+      <Auth
+        session={session}
+        error={error}
+        onSuccess={() => {
+          setError('');
+          void api<{ authenticated: boolean; setupRequired: boolean }>('/session').then(setSession);
+        }}
+      />
+    );
+  }
+
+  return (
+    <div className={`app-shell ${railCollapsed ? 'is-rail-collapsed' : ''}`}>
+      <a href="#main-workspace" className="skip-link">
+        跳至主内容
+      </a>
+
+      {mobileMenu && <div className="mobile-scrim" aria-hidden="true" onClick={() => setMobileMenu(false)} />}
+
+      <aside className={`nav-rail ${mobileMenu ? 'is-mobile-open' : ''}`} aria-label="主导航">
+        <div className="rail-brand">
+          <a
+            className="brand-lockup"
+            href="#foryou"
+            onClick={(e) => {
+              e.preventDefault();
+              navigate('foryou');
+            }}
+          >
+            <BrandEmblem />
+            <div className="brand-titles">
+              <strong className="brand-cn">新声簿</strong>
+              <span className="brand-en">ALBUM RELAY</span>
+            </div>
+          </a>
+          <button
+            type="button"
+            className="rail-collapse-btn"
+            aria-label={railCollapsed ? '展开导航' : '收起导航'}
+            title={railCollapsed ? '展开导航' : '收起导航'}
+            onClick={() => setRailCollapsed((v) => !v)}
+          >
+            {railCollapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+          </button>
+        </div>
+
+        <ul className="nav-list">
+          {mainNav.map((item) => {
+            const isSelected = page === item.id;
+            return (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  className={`nav-btn ${isSelected ? 'is-active' : ''}`}
+                  aria-current={isSelected ? 'page' : undefined}
+                  onClick={() => navigate(item.id)}
+                >
+                  <span className="nav-btn-main">
+                    <item.icon size={17} />
+                    <span className="nav-btn-label">{item.label}</span>
+                  </span>
+                  {item.count !== undefined && <span className="nav-count">{item.count}</span>}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+
+        <div className="rail-footer">
+          <button
+            type="button"
+            className={`nav-btn ${page === 'settings' ? 'is-active' : ''}`}
+            aria-current={page === 'settings' ? 'page' : undefined}
+            onClick={() => navigate('settings')}
+          >
+            <span className="nav-btn-main">
+              <SlidersHorizontal size={17} />
+              <span className="nav-btn-label">设置</span>
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className="netease-live-pill"
+            title="前往设置管理网易云连接"
+            onClick={() => navigate('settings', 'connect')}
+          >
+            <span className="od-row" style={{ '--od-gap': '8px' } as React.CSSProperties}>
+              <span className={`status-dot ${connection?.loggedIn ? '' : 'is-offline'}`} aria-hidden="true" />
+              <span className="netease-pill-text">{connection?.loggedIn ? '网易云已连接' : '网易云未连接'}</span>
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className="netease-live-pill"
+            title={aiSettings?.enabled ? `当前 AI 引擎：${aiSettings.provider} · ${aiSettings.model}` : '点击前往配置 AI 引擎'}
+            onClick={() => navigate('settings', 'advanced')}
+          >
+            <span className="od-row" style={{ '--od-gap': '8px' } as React.CSSProperties}>
+              <span className={`status-dot ${aiSettings?.enabled ? '' : 'is-offline'}`} aria-hidden="true" />
+              <span className="netease-pill-text">
+                {aiSettings?.enabled
+                  ? `${aiSettings.provider === 'gemini' ? 'Gemini' : aiSettings.provider === 'ollama' ? 'Ollama' : 'OpenAI'} · ${aiSettings.model}`
+                  : 'AI 未启用'}
+              </span>
+            </span>
+          </button>
+
+          <button
+            type="button"
+            className="rail-logout-btn"
+            onClick={() =>
+              void runAction('logout', async () => {
+                await api('/logout', {});
+                setSession({ authenticated: false, setupRequired: false });
+              })
+            }
+          >
+            <LogOut size={15} />
+            <span className="logout-label">退出登录</span>
+          </button>
+        </div>
+      </aside>
+
+      <div className="workspace-main">
+        <header className="mobile-top-bar">
+          <button
+            type="button"
+            className="mobile-menu-btn"
+            aria-label="打开导航"
+            onClick={() => setMobileMenu(!mobileMenu)}
+          >
+            <Menu size={18} />
+          </button>
+          <span className="breadcrumb-current">{pageLabels[page]}</span>
+        </header>
+
+        <main id="main-workspace" className="page-content" tabIndex={-1}>
+          {(blockedSources.length > 0 || blockedChallenges.length > 0) && (
+            <div className="challenge-strip" role="alert">
+              <AlertTriangle size={16} style={{ flexShrink: 0 }} />
+              <span style={{ flex: '1 1 auto' }}>
+                {(blockedChallenges.length > 0 ? blockedChallenges : blockedSources)
+                  .map((s) => `${sourceShort[s.source]} 需要完成一次验证`)
+                  .join(' · ')}
+              </span>
+              {blockedChallenges[0]?.url ? (
+                <a className="btn btn-secondary btn-sm" href={blockedChallenges[0].url} target="_blank" rel="noreferrer">
+                  前往验证 <ExternalLink size={12} />
+                </a>
+              ) : (
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => navigate('settings', 'connect')}>
+                  查看详情
+                </button>
+              )}
+            </div>
+          )}
+
+          {error && (
+            <div className="banner error" role="alert">
+              <span>{error}</span>
+              <button type="button" className="banner-close" aria-label="关闭提示" onClick={() => setError('')}>
+                <X size={16} />
+              </button>
+            </div>
+          )}
+
+          {notice && (
+            <div className="banner success" role="status">
+              <Check size={16} />
+              <span>{notice}</span>
+              <button type="button" className="banner-close" aria-label="关闭提示" onClick={() => setNotice('')}>
+                <X size={16} />
+              </button>
+            </div>
+          )}
+
+          {loading && !albums.length && !personal ? (
+            <div className="page-loading">
+              <Spinner />
+              <span>正在加载…</span>
+            </div>
+          ) : (
+            <>
+              {page === 'foryou' && (
+                <ForYouPage
+                  albums={albums}
+                  playlists={playlists}
+                  connection={connection}
+                  extensionPaired={Boolean(extensionState?.paired)}
+                  personal={personal}
+                  busy={busy}
+                  request={api}
+                  onAlbumUpdated={updateAlbumInState}
+                  onStatus={handleStatus}
+                  onToggleExclude={handleToggleExclude}
+                  onPersonalUpdated={loadPersonal}
+                  go={navigate}
+                />
+              )}
+
+              {page === 'albums' && (
+                <AlbumsPage
+                  albums={albums}
+                  aiEnabled={Boolean(personal?.aiEnabled)}
+                  busy={busy}
+                  request={api}
+                  onAlbumUpdated={updateAlbumInState}
+                  onStatus={handleStatus}
+                  onToggleExclude={handleToggleExclude}
+                />
+              )}
+
+              {page === 'playlists' && (
+                <PlaylistsPage
+                  playlists={playlists}
+                  settings={settings}
+                  aiSettings={aiSettings}
+                  draft={monthlyDraft}
+                  loggedIn={Boolean(connection?.loggedIn)}
+                  busy={busy === 'auto_sync' || Boolean(running)}
+                  previewBusy={busy === 'preview-monthly-ai'}
+                  onPreviewAi={handlePreviewMonthlyAi}
+                  onSyncNow={handleSyncNow}
+                  goSettings={(tab) => navigate('settings', tab)}
+                />
+              )}
+
+              {page === 'settings' && (
+                <SettingsPage
+                  tab={settingsTab}
+                  onTabChange={setSettingsTab}
+                  settings={settings}
+                  connection={connection}
+                  personal={personal}
+                  runs={runs}
+                  busy={busy}
+                  request={api}
+                  onSaveSettings={async (next) => {
+                    const saved = await api<Settings>('/settings', next, 'PUT');
+                    setSettings(saved);
+                    await load();
+                  }}
+                  onSyncNow={handleSyncNow}
+                  onAiSaved={(nextAi) => {
+                    setAiSettings(nextAi);
+                    setPersonal((cur) => (cur ? { ...cur, aiEnabled: nextAi.enabled } : cur));
+                  }}
+                  onPersonalUpdated={loadPersonal}
+                  onDataUpdated={load}
+                  setConnection={setConnection}
+                  notify={(msg) => {
+                    setError('');
+                    setNotice(msg);
+                  }}
+                  reportError={setError}
+                />
+              )}
+            </>
+          )}
+
+          <footer className="page-footer">
+            <span>新声簿 · Album Relay</span>
+            <span>好音乐，值得再传一程。</span>
+          </footer>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function Auth({
+  session,
+  error: initialError,
+  onSuccess
+}: {
+  session: { authenticated: boolean; setupRequired: boolean } | null;
+  error: string;
+  onSuccess: () => void;
+}) {
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const isSetup = Boolean(session?.setupRequired);
+
+  return (
+    <section className="auth-split-screen" aria-label="登录与初始化">
+      <div className="auth-hero-pane">
+        <div className="od-field" style={{ '--od-gap': '4px' } as React.CSSProperties}>
+          <span className="eyebrow" style={{ color: 'var(--ink-on-dark-muted)' }}>
+            新声簿 · ALBUM RELAY
+          </span>
+        </div>
+
+        <div className="auth-turntable-wrap">
+          <div className="hero-vinyl-platter" role="img" aria-label="黑胶唱片视觉">
+            <div className="hero-vinyl-label">
+              <span className="vinyl-label-rpm">33⅓ RPM · STEREO</span>
+              <strong style={{ fontFamily: 'var(--font-serif)', fontSize: '0.95rem', letterSpacing: '0.03em', lineHeight: 1.1 }}>
+                NEW SOUNDS
+                <br />
+                GOOD FINDS
+              </strong>
+            </div>
+          </div>
+        </div>
+
+        <div className="od-stack" style={{ '--od-gap': '10px' } as React.CSSProperties}>
+          <h1 className="auth-tagline-cn">跨越评分，抵达耳边</h1>
+          <p style={{ color: 'var(--ink-on-dark-muted)', fontSize: 'var(--text-body)' }}>
+            聚合 AOTY、RYM 与 Pitchfork 高分共识，自动整理你的网易云月度新专歌单。
+          </p>
+        </div>
+      </div>
+
+      <div className="auth-form-pane">
+        <div />
+        <div className="auth-card">
+          <form
+            className="od-stack"
+            style={{ '--od-gap': '18px' } as React.CSSProperties}
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setBusy(true);
+              setError('');
+              try {
+                await api(isSetup ? '/setup' : '/login', { password });
+                onSuccess();
+              } catch (err) {
+                setError((err as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            <div className="od-stack" style={{ '--od-gap': '8px' } as React.CSSProperties}>
+              <h2 className="cjk-heading" style={{ fontSize: 'var(--text-h2)' }}>
+                {isSetup ? '初始化新声簿' : '欢迎回到新声簿'}
+              </h2>
+              <p className="field-hint" style={{ fontSize: 'var(--text-sm)' }}>
+                {isSetup ? '设置至少 12 位管理员密码，开始自动收录与精选。' : '输入管理员密码，查看你的最新高分推荐。'}
+              </p>
+            </div>
+
+            {(error || initialError) && (
+              <div className="banner error" role="alert" style={{ marginBottom: 0 }}>
+                <span>{error || initialError}</span>
+              </div>
+            )}
+
+            <label className="form-field" htmlFor="password">
+              <span className="field-label">{isSetup ? '管理员密码' : '密码'}</span>
+              <input
+                id="password"
+                type="password"
+                className="input-control"
+                autoComplete={isSetup ? 'new-password' : 'current-password'}
+                minLength={isSetup ? 12 : 1}
+                placeholder={isSetup ? '至少 12 个字符' : '输入密码'}
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
+
+            <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={busy || !session}>
+              {busy && <Spinner size={15} />}
+              <span>{isSetup ? '完成初始化' : '进入新声簿'}</span>
+              <ArrowRight size={16} />
+            </button>
+
+            <div
+              style={{
+                paddingTop: '14px',
+                borderTop: '1px solid var(--line-subtle)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                color: 'var(--ink-tertiary)',
+                fontSize: 'var(--text-xs)'
+              }}
+            >
+              <ShieldCheck size={15} />
+              <span>自托管 · 本地存储 · 数据归你</span>
+            </div>
+          </form>
+        </div>
+
+        <div className="od-row" style={{ justifyContent: 'space-between', fontSize: 'var(--text-xs)', color: 'var(--ink-tertiary)' }}>
+          <span>新声簿 · Album Relay</span>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function AlbumsPage({
+  albums,
+  aiEnabled,
+  busy,
+  request,
+  onAlbumUpdated,
+  onStatus,
+  onToggleExclude
+}: {
+  albums: Album[];
+  aiEnabled: boolean;
+  busy: string | null;
+  request: <T>(path: string, body?: unknown, method?: string) => Promise<T>;
+  onAlbumUpdated: (a: Album) => void;
+  onStatus: (a: Album, s: ListeningStatus) => void;
+  onToggleExclude: (a: Album) => void;
+}) {
+  const [filter, setFilter] = useState<'selected' | 'saved_liked' | 'disagreement' | 'hidden'>('selected');
+  const [query, setQuery] = useState('');
+
+  const isHidden = (a: Album) => a.excluded || a.listeningStatus === 'disliked' || a.listeningStatus === 'skipped';
+
+  const visible = albums.filter((a) => {
+    const q = query.trim().toLowerCase();
+    if (
+      q &&
+      !`${a.artist} ${a.title} ${a.genres.join(' ')} ${a.aiReview?.shortReview ?? ''}`
+        .toLowerCase()
+        .includes(q)
+    ) {
+      return false;
+    }
+    if (filter === 'hidden') return isHidden(a);
+    if (isHidden(a)) return false;
+    if (filter === 'saved_liked') return a.listeningStatus === 'saved' || a.listeningStatus === 'liked';
+    if (filter === 'disagreement') return a.decision?.status === 'disagreement';
+    return a.decision?.status === 'selected';
+  });
+
+  const tabs = [
+    ['selected', '入选新专'],
+    ['saved_liked', '想听与喜欢'],
+    ['disagreement', '评分分歧'],
+    ['hidden', '已隐藏']
+  ] as const;
+
+  return (
+    <>
+      <div className="view-header">
+        <div className="view-title-group">
+          <h1 className="view-title">全部新专</h1>
+          <p className="view-subtitle">已达口碑门槛的新专辑，直接收听或标记喜好。</p>
+        </div>
+      </div>
+
+      <div className="filter-toolbar">
+        <div className="segmented-tabs" role="group" aria-label="专辑筛选" style={{ flexWrap: 'wrap' }}>
+          {tabs.map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className={`seg-tab ${filter === id ? 'is-active' : ''}`}
+              onClick={() => setFilter(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="od-row" style={{ '--od-gap': '8px' } as React.CSSProperties}>
+          <Search size={14} style={{ color: 'var(--ink-tertiary)' }} />
+          <input
+            id="lib-search-input"
+            type="search"
+            className="input-control"
+            style={{ width: '210px', padding: '6px 10px', fontSize: 'var(--text-sm)' }}
+            aria-label="搜索专辑、艺人或流派"
+            placeholder="搜索专辑、艺人或流派…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {query && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setQuery('')}>
+              清空
+            </button>
+          )}
+        </div>
+      </div>
+
+      {visible.length > 0 ? (
+        <div className="clean-card-grid">
+          {visible.map((album) => (
+            <AlbumCard
+              key={album.id}
+              album={album}
+              aiEnabled={aiEnabled}
+              busyKey={busy}
+              request={request}
+              onAlbumUpdated={onAlbumUpdated}
+              onStatus={onStatus}
+              onToggleExclude={onToggleExclude}
+            />
+          ))}
+        </div>
+      ) : (
+        <Empty
+          title={query ? '没有匹配的专辑' : '当前分类暂无专辑'}
+          action={
+            query || filter !== 'selected' ? (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => {
+                  setQuery('');
+                  setFilter('selected');
+                }}
+              >
+                返回入选新专
+              </button>
+            ) : undefined
+          }
+        >
+          {query
+            ? '试试更换关键词。'
+            : '在 Chrome 打开 RYM、AOTY 或 Pitchfork 页面，或等待每日自动巡检后新专会自动出现在这里。'}
+        </Empty>
+      )}
+    </>
+  );
+}
+
+function formatEngineBadge(aiSettings: AiSettings | null, draft?: MonthlyAiDraft | null): string {
+  if (draft?.engine === 'ai' && draft.model) {
+    const label = draft.provider === 'gemini' ? 'Google Gemini' : draft.provider === 'ollama' ? 'Ollama' : 'OpenAI 兼容';
+    return `${label} · ${draft.model}`;
+  }
+  if (aiSettings?.enabled) {
+    const label = aiSettings.provider === 'gemini' ? 'Google Gemini' : aiSettings.provider === 'ollama' ? 'Ollama' : 'OpenAI 兼容';
+    return `${label} · ${aiSettings.model}`;
+  }
+  return '本地口碑规则（未启用 AI）';
+}
+
+function PlaylistsPage({
+  playlists,
+  settings,
+  aiSettings,
+  draft,
+  loggedIn,
+  busy,
+  previewBusy,
+  onPreviewAi,
+  onSyncNow,
+  goSettings
+}: {
+  playlists: Playlist[];
+  settings: Settings | null;
+  aiSettings: AiSettings | null;
+  draft: MonthlyAiDraft | null;
+  loggedIn: boolean;
+  busy: boolean;
+  previewBusy: boolean;
+  onPreviewAi: () => void;
+  onSyncNow: () => void;
+  goSettings: (tab: SettingsTab) => void;
+}) {
+  const maxAlbums = settings?.playlist.maxAlbumsPerMonth ?? 12;
+  const aiCurated = (settings?.playlist.aiCurated ?? true) && Boolean(aiSettings?.enabled);
+  const aiDesc = (settings?.playlist.aiDescription ?? true) && Boolean(aiSettings?.enabled);
+
+  return (
+    <>
+      <div className="view-header">
+        <div className="view-title-group">
+          <h1 className="view-title">月度歌单</h1>
+          <p className="view-subtitle">硬口碑初筛后由 AI 二次把关入单，并撰写连贯的月度歌单导语。</p>
+        </div>
+
+        <div className="od-cluster" style={{ '--od-gap': '8px' } as React.CSSProperties}>
+          <button type="button" className="btn btn-secondary btn-sm" disabled={previewBusy || busy} onClick={onPreviewAi}>
+            {previewBusy ? <LoaderCircle size={14} className="spin" /> : <Sparkles size={14} />}
+            <span>{previewBusy ? '生成预览中…' : '预览本月 AI 选单与导语'}</span>
+          </button>
+          {loggedIn ? (
+            <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={onSyncNow}>
+              <ArrowDownToLine size={14} />
+              <span>{busy ? '同步中…' : '立即同步一次'}</span>
+            </button>
+          ) : (
+            <button type="button" className="btn btn-secondary btn-sm" onClick={() => goSettings('connect')}>
+              <span>连接网易云</span>
+              <ArrowRight size={13} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Explicit Monthly Playlist Rule Breakdown */}
+      <section className="monthly-rules-strip" aria-label="月度歌单生成规则">
+        <div className="od-row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', '--od-gap': '8px' } as React.CSSProperties}>
+          <strong style={{ fontSize: 'var(--text-sm)' }}>当月入单与简介规则</strong>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => goSettings('advanced')}>
+            当前引擎：{formatEngineBadge(aiSettings)}
+          </button>
+        </div>
+        <div className="monthly-rules-grid">
+          <div className="monthly-rule-step">
+            <span className="monthly-rule-num">01 · 口碑初筛</span>
+            <p className="monthly-rule-desc">从 AOTY / RYM / P4K 挑选近 {settings?.lookbackDays ?? 90} 天内高口碑且无评分分歧的专辑。</p>
+          </div>
+          <div className="monthly-rule-step">
+            <span className="monthly-rule-num">02 · AI 入单把关</span>
+            <p className="monthly-rule-desc">
+              {aiCurated
+                ? `已开启 AI 把关：结合品味画像淘汰风格碰撞专辑，单月最多精选 ${maxAlbums} 张。`
+                : `当前按评分权重排入前 ${maxAlbums} 张（可在「设置 → 连接与同步」开启 AI 把关）。`}
+            </p>
+          </div>
+          <div className="monthly-rule-step">
+            <span className="monthly-rule-num">03 · 完整匹配与去重</span>
+            <p className="monthly-rule-desc">仅写入网易云唯一匹配完整专辑，自动跳过已隐藏/不喜欢与往月已收录专辑。</p>
+          </div>
+          <div className="monthly-rule-step">
+            <span className="monthly-rule-num">04 · 连贯简介生成</span>
+            <p className="monthly-rule-desc">
+              {aiDesc
+                ? '同步前由 AI 梳理本月音乐主题与代表脉络撰写连贯短文，不再机械罗列分数清单。'
+                : '当前使用客观评分摘要简介（启用 AI 引擎后可写连贯月度导语）。'}
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {draft && (
+        <section className="monthly-draft-card" aria-label="本月 AI 歌单方案预览">
+          <div className="od-row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', '--od-gap': '8px' } as React.CSSProperties}>
+            <div className="od-cluster" style={{ '--od-gap': '8px' } as React.CSSProperties}>
+              <strong style={{ fontSize: 'var(--text-body)' }}>本月方案预览：《{draft.playlistName}》</strong>
+              <span className={`badge ${draft.engine === 'ai' ? 'badge-pass' : 'badge-split'}`}>
+                {formatEngineBadge(aiSettings, draft)}
+              </span>
+            </div>
+            <span className="mono-num field-hint">生成于 {formatDate(draft.generatedAt)}</span>
+          </div>
+
+          <div className="monthly-prose-box">
+            {draft.description
+              .split(/\n{2,}/)
+              .map((p) => p.trim())
+              .filter(Boolean)
+              .map((para, idx) => (
+                <p key={idx}>{para}</p>
+              ))}
+          </div>
+
+          <div className="monthly-decisions-grid">
+            <div className="monthly-decision-col">
+              <span className="field-label">拟入单专辑（{draft.admitted.length} 张）</span>
+              {draft.admitted.length ? (
+                <ul className="monthly-decision-list">
+                  {draft.admitted.map((item) => (
+                    <li key={item.albumId}>
+                      <div className="od-row" style={{ '--od-gap': '6px', flexWrap: 'wrap' } as React.CSSProperties}>
+                        <span className={`badge ${item.decision === 'retained' ? 'badge-excluded' : 'badge-pass'}`}>
+                          {item.decision === 'retained' ? '已保留' : '拟新增'}
+                        </span>
+                        <strong>{item.artist} — {item.title}</strong>
+                      </div>
+                      <span className="field-hint">{item.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="field-hint">当前暂无达到门槛的新专辑。</p>
+              )}
+            </div>
+
+            {draft.held.length > 0 && (
+              <div className="monthly-decision-col">
+                <span className="field-label">AI 建议暂缓（{draft.held.length} 张）</span>
+                <ul className="monthly-decision-list">
+                  {draft.held.map((item) => (
+                    <li key={item.albumId}>
+                      <div className="od-row" style={{ '--od-gap': '6px', flexWrap: 'wrap' } as React.CSSProperties}>
+                        <span className="badge badge-watch">暂缓</span>
+                        <strong>{item.artist} — {item.title}</strong>
+                      </div>
+                      <span className="field-hint">{item.reason}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {!playlists.length ? (
+        <Empty title="尚无已同步的月度歌单">
+          {loggedIn
+            ? '当有新的高分专辑通过 AI 把关且在网易云匹配到完整曲目时，系统会自动建单并同步；你也可先点击上方「预览本月 AI 选单与导语」查看效果。'
+            : '连接网易云音乐后，新入选的高分专辑会自动整理到当月歌单；当前也可先预览本月 AI 选单与导语。'}
+        </Empty>
+      ) : (
+        <div className="editions-grid">
+          {playlists.map((p, i) => (
+            <article className="edition-card" key={p.id}>
+              <div className="edition-sleeve-art" style={{ background: editionPalettes[i % editionPalettes.length] }}>
+                <div className="od-row" style={{ justifyContent: 'space-between', position: 'relative', zIndex: 2 }}>
+                  <span className="bespoke-cover-kicker">EDITION {String(i + 1).padStart(2, '0')}</span>
+                  <span className="badge-format" style={{ background: 'rgba(255,255,255,0.16)' }}>
+                    33⅓ RPM
+                  </span>
+                </div>
+                <div className="od-stack" style={{ '--od-gap': '6px', position: 'relative', zIndex: 2 } as React.CSSProperties}>
+                  <span className="latin-display" style={{ fontSize: '2.5rem', color: '#FFFFFF' }}>
+                    {p.month}
+                  </span>
+                  <h2 className="cjk-heading" style={{ fontSize: '1.25rem', color: '#FFFFFF' }}>
+                    {p.name}
+                  </h2>
+                </div>
+              </div>
+
+              <div className="od-stack" style={{ '--od-gap': '10px' } as React.CSSProperties}>
+                <div
+                  className="od-row"
+                  style={{ justifyContent: 'space-between', borderBottom: '1px solid var(--line-subtle)', paddingBottom: '8px' }}
+                >
+                  <span className="field-hint">收录规模</span>
+                  <strong className="mono-num" style={{ fontSize: 'var(--text-sm)' }}>
+                    {p.albumIds.length} 张专辑 · {p.trackCount} 首曲目
+                  </strong>
+                </div>
+                {p.description && (
+                  <p className="edition-desc-excerpt">{p.description}</p>
+                )}
+                <div className="od-row" style={{ justifyContent: 'space-between' }}>
+                  <span className="field-hint">最近更新</span>
+                  <span className="mono-num field-hint">{formatDate(p.updatedAt)}</span>
+                </div>
+                <div className="od-row" style={{ justifyContent: 'flex-end', paddingTop: '6px' }}>
+                  <a href={p.url} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm">
+                    <span>打开网易云</span>
+                    <ExternalLink size={13} />
+                  </a>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);

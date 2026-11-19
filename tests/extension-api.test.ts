@@ -44,7 +44,7 @@ it('pairs the extension with a bearer token that is isolated from session cookie
   const ext={authorization:`Bearer ${first}`,origin:'chrome-extension://abcdefghijklmnop','x-album-relay-extension':'0.1.0'};
   const config=await t.app.inject({url:'/api/ext/config',headers:ext});
   expect(config.statusCode).toBe(200);
-  expect(config.json().refresh).toMatchObject({enabled:false,hour:10});
+  expect(config.json().refresh).toMatchObject({enabled:true,hour:10});
   expect(config.json().refresh.targets[0]).toBe(`https://rateyourmusic.com/charts/top/album/${new Date().getFullYear()}/1/`);
   expect(config.json().refresh.targets).toContain('https://pitchfork.com/reviews/albums/');
   // The bearer token does not open administrator endpoints.

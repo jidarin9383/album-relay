@@ -67,3 +67,22 @@ it('expires browser-capture evidence older than 7 days and marks transport match
  expect(x.store.runs().find(r=>r.id===syncRun.id)?.status).toBe('failed');
  expect(x.netease.sync).not.toHaveBeenCalled();
 });
+it('auto_sync evaluates, matches and writes the playlist in one run without prior preview',async()=>{
+ const x=setup();
+ const a=selected();a.match=undefined;
+ const dismissed={...selected(),id:'d',artist:'Dismissed',title:'Skipped LP',listeningStatus:'skipped' as const};
+ x.store.saveAlbums([a,dismissed]);
+ x.netease.match.mockImplementation(async(alb)=>({id:`m-${alb.id}`,originalId:99,name:alb.title,artist:alb.artist,releaseDate:alb.releaseDate,tracks:[{id:'t1',originalId:201,name:'Song'}]}));
+ x.netease.sync.mockImplementationOnce(async(p,checkpoint)=>{
+  const playlist:Playlist={month:p.month,id:'pl-auto',originalId:888,name:p.playlistName,url:'https://music.163.com/#/playlist?id=888',albumIds:p.albums.map(al=>al.id),trackCount:p.trackCount,updatedAt:new Date().toISOString()};
+  await checkpoint(playlist);
+  return playlist;
+ });
+ const run=x.runner.start('auto_sync');
+ await x.runner.wait();
+ expect(x.netease.match).toHaveBeenCalledTimes(1);
+ expect(x.netease.sync).toHaveBeenCalledTimes(1);
+ expect(x.store.runs().find(r=>r.id===run.id)?.status).toBe('succeeded');
+ expect(x.store.albums().find(al=>al.id==='a')?.admittedMonth).toMatch(/^\d{4}-\d{2}$/);
+ expect(x.store.playlists()[0]?.albumIds).toEqual(['a']);
+});

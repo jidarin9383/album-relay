@@ -7,7 +7,19 @@ export function isObservationFresh(o:Observation,now=Date.now()):boolean {
  if(!Number.isFinite(at))return false;
  return now-at<(o.collectionMethod==='browser-capture'?CAPTURE_TTL_MS:SCRAPE_TTL_MS);
 }
-export const defaultSettings: Settings = { allowApproximateVotes:false, lookbackDays:90, minimumAgeDays:7, minSources:2, thresholds:{aoty:{score:80,votes:100,negative:70},rym:{score:3.5,votes:100,negative:3},pitchfork:{score:8,negative:7,allowBnm:true}},sources:{aoty:true,rym:true,pitchfork:true},schedule:{enabled:false,weekday:3,hour:12,minute:0,timezone:'Asia/Taipei'},playlist:{namePattern:'高分新专辑｜YYYY-MM',descriptionMaxChars:1000},requestDelayMs:6000};
+export const defaultSettings: Settings = {
+  allowApproximateVotes: true,
+  allowSingleSourceAcclaim: true,
+  autoSyncPlaylist: true,
+  lookbackDays: 90,
+  minimumAgeDays: 0,
+  minSources: 2,
+  thresholds: { aoty: { score: 80, votes: 100, negative: 70 }, rym: { score: 3.5, votes: 100, negative: 3 }, pitchfork: { score: 8, negative: 7, allowBnm: true } },
+  sources: { aoty: true, rym: true, pitchfork: true },
+  schedule: { enabled: false, weekday: 3, hour: 12, minute: 0, timezone: 'Asia/Taipei' },
+  playlist: { namePattern: '高分新专辑｜YYYY-MM', descriptionMaxChars: 1000, aiCurated: true, aiDescription: true, maxAlbumsPerMonth: 12 },
+  requestDelayMs: 6000
+};
 export function todayInTimezone(timezone:string,now=new Date()):string {
  const parts=new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now);
  const part=(name:string)=>parts.find(p=>p.type===name)!.value;
@@ -27,10 +39,17 @@ export function effectiveVotes(s:Observation,allowApproximate?:boolean):number {
  }
  return 0;
 }
+const SOURCE_DISPLAY_LABELS: Record<SourceName, string> = { aoty: 'AOTY', rym: 'RYM', pitchfork: 'P4K' };
+
 export function decide(album:Album,settings:Settings,today:string):Decision {
- const result=(status:Decision['status'],reasons:string[],qualifyingSources:SourceName[]=[]):Decision=>({status,reasons,qualifyingSources});
- if(album.excluded)return result('excluded',['手动排除']);
- if(album.format==='EP'||album.format==='Reissue')return result('format_conflict',[album.format==='EP'?'EP 短专辑不计入全长专辑筛选':'重制或再版专辑不计入新专筛选']);
+ const result=(status:Decision['status'],reasons:string[],qualifyingSources:SourceName[]=[],negativeSources?:SourceName[]):Decision=>({
+  status,
+  reasons,
+  qualifyingSources,
+  ...(negativeSources?.length?{negativeSources}:{})
+ });
+ if(album.excluded)return result('excluded',['已隐藏']);
+ if(album.format==='Reissue')return result('format_conflict',['重制或再版专辑不计入新专筛选']);
  const date=Date.parse(`${album.releaseDate}T00:00:00Z`), now=Date.parse(`${today}T00:00:00Z`);
  const hasDate=Boolean(album.releaseDate)&&Number.isFinite(date)&&Number.isFinite(now);
  if(hasDate){
@@ -38,17 +57,63 @@ export function decide(album:Album,settings:Settings,today:string):Decision {
   if(age<settings.minimumAgeDays)return result('too_new',['等待发行满指定天数']);
   if(age>settings.lookbackDays)return result('out_of_window',['超出发行时间范围']);
  }
- const passing=new Set<SourceName>(),negative=new Set<SourceName>();
- for(const s of album.sources){if(s.status!=='ok'||s.score===null||!settings.sources[s.source])continue;
-  if(s.source==='pitchfork'){const t=settings.thresholds.pitchfork;if(s.score>=t.score||(t.allowBnm&&s.bestNewMusic))passing.add(s.source);if(s.score<t.negative)negative.add(s.source)}
-  else {const t=settings.thresholds[s.source];const v=effectiveVotes(s,settings.allowApproximateVotes);if(t.votes===0||v>=t.votes){if(s.score>=t.score)passing.add(s.source);if(s.score<t.negative)negative.add(s.source)}}
+ const passing=new Set<SourceName>(),negative=new Set<SourceName>(),strongSingle=new Set<SourceName>();
+ const highLabels:string[]=[],lowLabels:string[]=[];
+ const allowSingle=settings.allowSingleSourceAcclaim??true;
+ for(const s of album.sources){
+  if(s.status!=='ok'||s.score===null||!settings.sources[s.source])continue;
+  const label=SOURCE_DISPLAY_LABELS[s.source];
+  if(s.source==='pitchfork'){
+   const t=settings.thresholds.pitchfork;
+   if(s.score>=t.score||(t.allowBnm&&s.bestNewMusic)){
+    passing.add(s.source);
+    highLabels.push(`${label} ${s.score}${s.bestNewMusic?' BNM':''}（≥${t.score}）`);
+   }
+   if(s.score<t.negative){
+    negative.add(s.source);
+    lowLabels.push(`${label} ${s.score}（<${t.negative}）`);
+   }
+   if((t.allowBnm&&Boolean(s.bestNewMusic))||(hasDate&&s.score>=Math.max(t.score,8.3))){
+    strongSingle.add(s.source);
+   }
+  }else{
+   const t=settings.thresholds[s.source];
+   const v=effectiveVotes(s,settings.allowApproximateVotes??true);
+   if(t.votes===0||v>=t.votes){
+    if(s.score>=t.score){
+     passing.add(s.source);
+     highLabels.push(`${label} ${s.score}（≥${t.score}）`);
+    }
+    if(s.score<t.negative){
+     negative.add(s.source);
+     lowLabels.push(`${label} ${s.score}（<${t.negative}）`);
+    }
+   }
+   if(
+    (hasDate||Boolean(s.collectionMethod))&&
+    ((s.source==='rym'&&s.score>=Math.max(t.score,3.7)&&v>=Math.max(t.votes,300))||
+     (s.source==='aoty'&&s.score>=Math.max(t.score,82)&&v>=Math.max(t.votes,250)))
+   ){
+    strongSingle.add(s.source);
+   }
+  }
  }
- const qualified=[...passing];if(negative.size)return result('disagreement',[`存在明显分歧：${[...negative].join('、')}`],qualified);
- if(passing.size<settings.minSources){
-  if(!hasDate&&album.format==='Unknown')return result('pending',['单站乐评待印证（收录 RYM 或 AOTY 后自动补全发行日期与 LP 格式）'],qualified);
-  return result('pending',['等待更多站点评分或评分人数'],qualified);
+ const qualified=[...passing];
+ const lowList=[...negative];
+ if(negative.size&&passing.size){
+  return result('disagreement',[`高分站：${highLabels.join('、')} vs 偏低站：${lowLabels.join('、')}`],qualified,lowList);
  }
- if(!hasDate)return result('pending',['发行日期待确认'],qualified);
- if(album.format!=='LP')return result('format_conflict',['已达评分条件，但专辑格式尚未确认为 LP'],qualified);
- return result('selected',['跨站评分达到入选条件'],qualified);
+ if(negative.size){
+  return result('pending',[`仅收单站偏低评分：${lowLabels.join('、')}`],[],lowList);
+ }
+ if(passing.size>=settings.minSources){
+  if(!hasDate&&album.sources.every(s=>s.source==='pitchfork'&&!s.bestNewMusic)){
+   return result('pending',['等待确认发行时间'],qualified);
+  }
+  return result('selected',['跨站高分入选'],qualified);
+ }
+ if(allowSingle&&strongSingle.size>0){
+  return result('selected',['高口碑佳作入选'],qualified.length?qualified:[...strongSingle]);
+ }
+ return result('pending',['未达入选门槛'],qualified);
 }

@@ -5,6 +5,7 @@ services:
       - "3210:3210"
     environment:
       ALBUM_RELAY_DATA_DIR: /data
+      TRUST_PROXY: "${TRUST_PROXY:-false}"
     volumes:
       - album-data:/data
     restart: unless-stopped

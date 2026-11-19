@@ -18,7 +18,10 @@ it('recovers a source action interrupted before any run was created',async()=>{
  const app=await createApp({dataDir:dir,scheduler:false});const after=new Store(dir);
  try{expect(after.acquireLock('next-run')).toBe(true);}finally{after.releaseLock('next-run');after.close();await app.close();rmSync(dir,{recursive:true,force:true});}
 });
-it('completes capture, library_preview and sync end-to-end through HTTP without scraping sources',async()=>{
+it.each([
+ { mode: 'library_preview and sync', automatic: false },
+ { mode: 'automatic recommendations and sync', automatic: true }
+])('completes capture, $mode end-to-end through HTTP without scraping sources', async ({ automatic }) => {
  const dir=mkdtempSync(join(tmpdir(),'relay-library-preview-api-'));
  const release=new Date(Date.now()-20*86400000);
  const months=['January','February','March','April','May','June','July','August','September','October','November','December'];
@@ -27,22 +30,29 @@ it('completes capture, library_preview and sync end-to-end through HTTP without 
  const isoDate=release.toISOString().slice(0,10);
  const rymHtml=rymChart.replace('30 October 2026',rymDate);
  const aotyHtml=aotyChart.replace('October 30, 2026',aotyDate);
- const fetchMock=vi.fn(async()=>new Response('',{status:500}));vi.stubGlobal('fetch',fetchMock);
- let playlistName='',playlistDesc='';
+ const fetchMock=vi.fn(async (_input: RequestInfo | URL)=>new Response('',{status:500}));vi.stubGlobal('fetch',fetchMock);
+ if (automatic) {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const seed = new Store(dir);
+  seed.setValue('netease-configured', 'true');
+  seed.close();
+ }
+ let playlistName='',playlistDesc='',addCalls=0;
  let tracks:{id:string;originalId:number;name:string}[]=[];
  const netease=new NeteaseClient(dir,{command:async(args)=>{
   const cmd=`${args[0]} ${args[1]}`;
+  if(args[0]==='login')return {success:true};
   if(cmd==='search album')return {code:200,data:{records:[{id:'alb-1',originalId:101,name:'Moon',artists:[{name:'Stars'}],publishTime:Date.parse(`${isoDate}T00:00:00Z`)}]}};
   if(cmd==='album tracks')return {code:200,data:[{id:'tr-1',originalId:1001,name:'Track One'},{id:'tr-2',originalId:1002,name:'Track Two'}]};
   if(cmd==='playlist create'){const idx=args.indexOf('--playlistName');playlistName=idx>=0?args[idx+1]!:'';return {code:200,data:{id:'pl-1',originalId:5001}};}
   if(cmd==='playlist tracks')return {code:200,data:tracks};
-  if(cmd==='playlist add'){const idx=args.indexOf('--songIdList');const ids=JSON.parse(args[idx+1]!) as string[];tracks=tracks.concat(ids.map((id,i)=>({id,originalId:1001+i,name:`Track ${i+1}`})));return {code:200,data:{}};}
+  if(cmd==='playlist add'){addCalls++;const idx=args.indexOf('--songIdList');const ids=JSON.parse(args[idx+1]!) as string[];tracks=tracks.concat(ids.map((id,i)=>({id,originalId:1001+i,name:`Track ${i+1}`})));return {code:200,data:{}};}
   if(cmd==='playlist reorder'){const idx=args.indexOf('--trackIds');const ids=JSON.parse(args[idx+1]!) as string[];tracks=ids.map(id=>tracks.find(t=>t.id===id)!);return {code:200,data:{}};}
   if(cmd==='playlist updateDesc'){const idx=args.indexOf('--desc');playlistDesc=idx>=0?args[idx+1]!:'';return {code:200,data:{}};}
   if(cmd==='playlist get')return {code:200,data:{name:playlistName,describe:playlistDesc,trackCount:tracks.length}};
   throw new Error(`Unexpected command: ${cmd}`);
  }});
- const app=await createApp({dataDir:dir,scheduler:false,sources:new SourceService(dir),netease});
+ const app=await createApp({dataDir:dir,scheduler:automatic,sources:new SourceService(dir),netease});
  const waitRun=async(id:string,cookie:string)=>{
   for(let i=0;i<50;i++){
    const res=await app.inject({url:`/api/runs/${id}`,headers:{cookie}});
@@ -58,27 +68,49 @@ it('completes capture, library_preview and sync end-to-end through HTTP without 
   const push=await extensionPush(app,cookie);
   expect((await push('https://rateyourmusic.com/charts/top/album/2026/1/',rymHtml)).statusCode).toBe(200);
   expect((await push('https://www.albumoftheyear.org/ratings/user-highest-rated/lp/2026/',aotyHtml)).statusCode).toBe(200);
-  const settings=(await app.inject({url:'/api/settings',headers:{cookie}})).json();
-  settings.allowApproximateVotes=true;
-  expect((await app.inject({method:'PUT',url:'/api/settings',headers:{cookie},payload:settings})).statusCode).toBe(200);
-  const previewStart=await app.inject({method:'POST',url:'/api/runs',headers:{cookie},payload:{mode:'library_preview'}});
-  expect(previewStart.statusCode).toBe(200);
-  const previewRun=await waitRun(previewStart.json().id,cookie);
-  expect(previewRun.status).toBe('succeeded');
-  expect(previewRun.preview.albums).toHaveLength(1);
-  expect(previewRun.preview.trackCount).toBe(2);
-  expect(fetchMock).not.toHaveBeenCalled();
-  const syncStart=await app.inject({method:'POST',url:'/api/runs',headers:{cookie},payload:{mode:'sync'}});
-  expect(syncStart.statusCode).toBe(200);
-  const syncRun=await waitRun(syncStart.json().id,cookie);
-  expect(syncRun.status).toBe('succeeded');
+  if (automatic) {
+   await vi.advanceTimersByTimeAsync(7999);
+   expect((await app.inject({url:'/api/runs',headers:{cookie}})).json()).toEqual([]);
+   await vi.advanceTimersByTimeAsync(1);
+   const runs = (await app.inject({url:'/api/runs',headers:{cookie}})).json();
+   expect(runs).toHaveLength(1);
+   expect(runs[0]).toMatchObject({ mode: 'auto_sync', status: 'succeeded' });
+   const [recommendations] = (await app.inject({url:'/api/recommendations',headers:{cookie}})).json();
+   expect(recommendations.items[0]?.album.title).toBe('Moon');
+   const [album] = (await app.inject({url:'/api/albums',headers:{cookie}})).json();
+   expect(album.admittedMonth).toMatch(/^\d{4}-\d{2}$/);
+   expect(fetchMock.mock.calls.every(([url]) =>
+    !['rateyourmusic.com','www.albumoftheyear.org','pitchfork.com'].includes(new URL(String(url)).hostname)
+   )).toBe(true);
+   expect(addCalls).toBe(1);
+   expect((await app.inject({method:'POST',url:'/api/automation/run',headers:{cookie}})).statusCode).toBe(200);
+   await vi.advanceTimersByTimeAsync(0);
+   expect((await app.inject({url:'/api/runs',headers:{cookie}})).json()).toHaveLength(2);
+   expect(addCalls).toBe(1);
+  } else {
+   const settings=(await app.inject({url:'/api/settings',headers:{cookie}})).json();
+   settings.allowApproximateVotes=true;
+   expect((await app.inject({method:'PUT',url:'/api/settings',headers:{cookie},payload:settings})).statusCode).toBe(200);
+   const previewStart=await app.inject({method:'POST',url:'/api/runs',headers:{cookie},payload:{mode:'library_preview'}});
+   expect(previewStart.statusCode).toBe(200);
+   const previewRun=await waitRun(previewStart.json().id,cookie);
+   expect(previewRun.status).toBe('succeeded');
+   expect(previewRun.preview.albums).toHaveLength(1);
+   expect(previewRun.preview.trackCount).toBe(2);
+   expect(fetchMock).not.toHaveBeenCalled();
+   const syncStart=await app.inject({method:'POST',url:'/api/runs',headers:{cookie},payload:{mode:'sync'}});
+   expect(syncStart.statusCode).toBe(200);
+   const syncRun=await waitRun(syncStart.json().id,cookie);
+   expect(syncRun.status).toBe('succeeded');
+  }
   const playlists=(await app.inject({url:'/api/playlists',headers:{cookie}})).json();
   expect(playlists).toHaveLength(1);
   expect(playlists[0]).toMatchObject({id:'pl-1',originalId:5001,trackCount:2});
   expect(playlists[0].albumIds).toHaveLength(1);
  }finally{
-  vi.unstubAllGlobals();
   await app.close();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
   rmSync(dir,{recursive:true,force:true});
  }
 });

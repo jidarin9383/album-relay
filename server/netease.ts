@@ -9,6 +9,13 @@ export type CommandRunner = (args: readonly string[])=>Promise<unknown>;
 interface ClientOptions { delayMs?:number; executable?:string; useDesktopAccount?:boolean; command?:CommandRunner }
 const object = (v:unknown):ObjectValue => v && typeof v==='object' && !Array.isArray(v) ? v as ObjectValue : {};
 const normalized = (v:string)=>v.normalize('NFKD').replace(/\p{M}/gu,'').toLowerCase().replace(/[^\p{L}\p{N}]/gu,'');
+const DAY_MS = 86_400_000;
+const CHINA_OFFSET_MS = 8 * 3_600_000;
+
+function chinaCatalogDay(timestamp: number): number {
+  return Math.floor((timestamp + CHINA_OFFSET_MS) / DAY_MS);
+}
+
 function track(v:unknown):Track { const t=object(v); if(typeof t.id!=='string'||typeof t.originalId!=='number'||typeof t.name!=='string') throw new Error('网易云曲目格式不兼容');return {id:t.id,originalId:t.originalId,name:t.name,...(typeof t.duration==='number'?{duration:t.duration}:{})}; }
 export class NeteaseClient {
   private queue:Promise<unknown>=Promise.resolve(); private lastFinished=0; private children=new Set<ChildProcess>(); private closed=false;
@@ -70,15 +77,38 @@ export class NeteaseClient {
   }
   async cancelLogin():Promise<ConnectionStatus>{this.generation++;await this.killChildren();this.connection={configured:this.connection.configured,loggedIn:false,message:'已关闭二维码；上游授权轮询可能仍在继续，请勿扫描旧二维码',loginState:'idle'};return {...this.connection};}
   private async killChildren():Promise<void>{for(const child of this.children){try{if(child.pid&&process.platform!=='win32')process.kill(-child.pid,'SIGKILL');else child.kill('SIGKILL');}catch{}}this.children.clear();}
-  async match(album:Album):Promise<MatchedAlbum|null>{
+  async match(album: Album, lookbackDays = 180): Promise<MatchedAlbum | null> {
     const data=object(await this.api(['search','album'],['--keyword',`${album.artist} ${album.title}`,'--limit','20','--offset','0']));
     const records=Array.isArray(data.records)?data.records:[];
-    const candidates=records.map(object).filter(r=>typeof r.id==='string'&&typeof r.originalId==='number'&&typeof r.name==='string'&&normalized(r.name)===normalized(album.title)&&Array.isArray(r.artists)&&r.artists.some(a=>normalized(String(object(a).name??''))===normalized(album.artist))&&typeof r.publishTime==='number'&&new Date(r.publishTime+8*3600000).toISOString().slice(0,10)===album.releaseDate);
-    if(candidates.length!==1)return null;const found=candidates[0]!;
+    const title = normalized(album.title);
+    const artist = normalized(album.artist);
+    const candidates = records.map(object).flatMap((record) => {
+      const { id, originalId, name, artists, publishTime } = record;
+      if (
+        typeof id !== 'string' || typeof originalId !== 'number' ||
+        typeof name !== 'string' || normalized(name) !== title ||
+        !Array.isArray(artists) || !artists.some((a) => normalized(String(object(a).name ?? '')) === artist) ||
+        typeof publishTime !== 'number' || !Number.isFinite(new Date(publishTime + CHINA_OFFSET_MS).getTime())
+      ) return [];
+      return [{ id, originalId, name, day: chinaCatalogDay(publishTime) }];
+    });
+
+    let matches;
+    if (album.releaseDate) {
+      const sourceDay = Date.parse(`${album.releaseDate}T00:00:00Z`) / DAY_MS;
+      const exact = candidates.filter((candidate) => candidate.day === sourceDay);
+      matches = exact.length ? exact : candidates.filter((candidate) => Math.abs(candidate.day - sourceDay) <= 2);
+    } else {
+      const today = chinaCatalogDay(Date.now());
+      matches = candidates.filter((candidate) => candidate.day <= today && candidate.day >= today - lookbackDays);
+    }
+    if (matches.length !== 1) return null;
+    const found = matches[0]!;
+    const releaseDate = new Date(found.day * DAY_MS).toISOString().slice(0, 10);
     const dataTracks=await this.api(['album','tracks'],['--albumId',String(found.id)]);
     if(!Array.isArray(dataTracks)||!dataTracks.length)return null;const tracks=dataTracks.map(track);
     if(new Set(tracks.map(t=>t.id)).size!==tracks.length)return null;
-    return {id:String(found.id),originalId:Number(found.originalId),name:String(found.name),artist:album.artist,releaseDate:album.releaseDate,tracks};
+    return { id: found.id, originalId: found.originalId, name: found.name, artist: album.artist, releaseDate, tracks };
   }
   async tracks(id:string):Promise<Track[]>{const result:Track[]=[];for(let offset=0;offset<100000;offset+=500){const data=await this.api(['playlist','tracks'],['--playlistId',id,'--limit','500','--offset',String(offset)]);if(!Array.isArray(data))throw new Error('网易云歌单格式不兼容');result.push(...data.map(track));if(data.length<500)return result;}throw new Error('网易云歌单过大，停止同步以保护原内容');}
   async create(name:string):Promise<{id:string;originalId:number}>{const data=object(await this.api(['playlist','create'],['--playlistName',name]));if(typeof data.id!=='string'||typeof data.originalId!=='number')throw new Error('网易云未返回歌单编号');return {id:data.id,originalId:data.originalId};}

@@ -31,10 +31,10 @@ it('resolves public covers without mutating saved album snapshots and supports m
  try{
   const setup=await app.inject({method:'POST',url:'/api/setup',payload:{password:'cover-format-test-password'}});
   const cookie=setup.headers['set-cookie'] as string;
-  // Startup migration marks Unknown format on a ready LP candidate as format_conflict (when minSources met & dated)
+  // Startup migration admits qualified Unknown-format albums directly as selected
   const listedBefore=(await app.inject({url:'/api/albums',headers:{cookie}})).json();
   expect(listedBefore[0].coverUrl).toBeUndefined();
-  expect(listedBefore[0].decision.status).toBe('format_conflict');
+  expect(listedBefore[0].decision.status).toBe('selected');
   // Cover route resolves a public cover and redirects 302 without mutating store.albums()
   const coverRes=await app.inject({url:'/api/albums/alb-1/cover',headers:{cookie}});
   expect(coverRes.statusCode).toBe(302);
@@ -46,8 +46,11 @@ it('resolves public covers without mutating saved album snapshots and supports m
    expect(verifyStore.albums()[0]?.coverUrl).toBe(originalAlbums[0]?.coverUrl);
    expect(verifyStore.covers()['alb-1']).toBe('https://is1-ssl.mzstatic.com/image/thumb/x/300x300bb.jpg');
   }finally{verifyStore.close();}
-  // Manual format update promotes LP to selected and clears latest-preview
+  // Manual format update rejects Reissue as format_conflict and promotes LP back to selected
   expect((await app.inject({method:'POST',url:'/api/albums/alb-1/format',headers:{cookie},payload:{format:'INVALID'}})).statusCode).toBe(400);
+  const reissueRes=await app.inject({method:'POST',url:'/api/albums/alb-1/format',headers:{cookie},payload:{format:'Reissue'}});
+  expect(reissueRes.statusCode).toBe(200);
+  expect(reissueRes.json()).toMatchObject({format:'Reissue',decision:{status:'format_conflict'}});
   const formatted=await app.inject({method:'POST',url:'/api/albums/alb-1/format',headers:{cookie},payload:{format:'LP'}});
   expect(formatted.statusCode).toBe(200);
   expect(formatted.json()).toMatchObject({format:'LP',coverUrl:'https://is1-ssl.mzstatic.com/image/thumb/x/300x300bb.jpg',decision:{status:'selected'}});
@@ -55,5 +58,28 @@ it('resolves public covers without mutating saved album snapshots and supports m
   vi.unstubAllGlobals();
   await app.close();
   rmSync(dir,{recursive:true,force:true});
+ }
+});
+
+it.each([false, true])('checks origin against the effective host only when proxy headers are trusted (%s)', async (trusted) => {
+ const original = process.env.TRUST_PROXY;
+ process.env.TRUST_PROXY = String(trusted);
+ const dir = mkdtempSync(join(tmpdir(), 'relay-proxy-origin-'));
+ const app = await createApp({ dataDir: dir, scheduler: false });
+ try {
+  const lan = await app.inject({ url: '/api/session', headers: {
+   host: '192.0.2.20:3210', origin: 'http://192.0.2.20:3210'
+  } });
+  expect(lan.statusCode).toBe(200);
+  const headers = { host: '127.0.0.1:3210', 'x-forwarded-host': 'relay.example.test', 'x-forwarded-proto': 'https' };
+  const forwarded = await app.inject({ url: '/api/session', headers: { ...headers, origin: 'https://relay.example.test' } });
+  expect(forwarded.statusCode).toBe(trusted ? 200 : 403);
+  const foreign = await app.inject({ url: '/api/session', headers: { ...headers, origin: 'https://other.example.test' } });
+  expect(foreign.statusCode).toBe(403);
+ } finally {
+  if (original === undefined) delete process.env.TRUST_PROXY;
+  else process.env.TRUST_PROXY = original;
+  await app.close();
+  rmSync(dir, { recursive: true, force: true });
  }
 });

@@ -30,7 +30,7 @@ export class SourceService {
  }
  private async detail(source:SourceName,url:string,settings:Settings):Promise<Album|null>{const cached=this.cache[url];if(cached&&Date.now()-cached.at<TTL)return structuredClone(cached.album);const result=parsers[source](await this.html(source,url,settings),url);if(result)this.cache[url]={at:Date.now(),album:result};return result;}
  private indexUrl(source:SourceName,year:number,page:number):string {if(source==='aoty')return `${origins.aoty}/ratings/user-highest-rated/lp/${year}/?p=${page}`;if(source==='rym')return `${origins.rym}/charts/top/album/${year}/${page}/`;return `${origins.pitchfork}/reviews/albums/?page=${page}`;}
- private querySearchUrl(source:SourceName,query:string):string{const q=encodeURIComponent(query);return source==='aoty'?`${origins.aoty}/search/?q=${q}`:source==='rym'?`${origins.rym}/search?searchterm=${q}&searchtype=l`:`${origins.pitchfork}/search/?query=${q}`;}
+ private querySearchUrl(source:SourceName,query:string):string{const q=encodeURIComponent(query);return source==='aoty'?`${origins.aoty}/search/?q=${q}`:source==='rym'?`${origins.rym}/search?searchterm=${q}&searchtype=l`:`${origins.pitchfork}/search/?q=${q}`;}
  private searchUrl(source:SourceName,album:Album):string{return this.querySearchUrl(source,`${album.artist} ${album.title}`);}
  private merge(map:Map<string,Album>,fresh:Album):void{
   const key=normalizeIdentity(fresh.artist)+'|'+normalizeIdentity(fresh.title);const old=map.get(key);

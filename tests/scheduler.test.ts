@@ -1,5 +1,26 @@
-import {it,expect,vi} from 'vitest';
-import { Scheduler } from '../server/scheduler.js';
+import { afterEach, expect, it, vi } from 'vitest';
 import { defaultSettings } from '../server/policy.js';
-it('stays disabled by default and calculates timezone-aware next run when enabled',()=>{const settings=structuredClone(defaultSettings);const runner={start:vi.fn(),wait:vi.fn(),recoverInterrupted:vi.fn()};const scheduler=new Scheduler({settings:()=>settings,runs:()=>[]},runner);expect(scheduler.nextRun()).toBeNull();settings.schedule.enabled=true;scheduler.configure();expect(scheduler.nextRun()).toMatch(/^\d{4}-/);expect(runner.recoverInterrupted).toHaveBeenCalledTimes(1);scheduler.stop();});
-it('scheduled occurrence writes only after its own succeeded preview',async()=>{let runs:import('../shared/types.js').Run[]=[];const base={id:'p',mode:'preview' as const,status:'succeeded' as const,stage:'complete',message:'',startedAt:'',logs:[],preview:{month:'2026-11',playlistName:'P',albums:[{id:'a',artist:'A',title:'B',releaseDate:'2026-10-01',format:'LP',genres:[],sources:[],excluded:false,decision:{status:'selected',qualifyingSources:[],reasons:[]},match:{id:'m',originalId:1,name:'B',artist:'A',releaseDate:'2026-10-01',tracks:[{id:'t',originalId:2,name:'T'}]}}],trackCount:1,existingPlaylist:null,warnings:[]}};const runner={recoverInterrupted:vi.fn(),start:vi.fn((mode)=>{const run={...base,id:mode==='preview'?'p':'s',mode} as import('../shared/types.js').Run;runs.push(run);return run;}),wait:vi.fn(async()=>{})};const scheduler=new Scheduler({settings:()=>structuredClone(defaultSettings),runs:()=>runs},runner);await scheduler.tick();expect(runner.start.mock.calls.map(c=>c[0])).toEqual(['preview','sync']);runner.start.mockClear();runs=[];runner.start.mockImplementation((mode)=>{const r={...base,mode,status:'partial'} as import('../shared/types.js').Run;runs.push(r);return r;});await scheduler.tick();expect(runner.start.mock.calls.map(c=>c[0])).toEqual(['preview']);scheduler.stop();});
+import { Scheduler } from '../server/scheduler.js';
+
+afterEach(() => vi.useRealTimers());
+
+it('stays disabled by default and dispatches an enabled legacy schedule to the coordinator at its configured local time', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-11-18T03:59:59Z'));
+  const settings = structuredClone(defaultSettings);
+  const run = vi.fn(async () => {});
+  const scheduler = new Scheduler({ settings: () => settings }, run);
+  try {
+    expect(scheduler.nextRun()).toBeNull();
+    settings.schedule = { enabled: true, weekday: 3, hour: 12, minute: 0, timezone: 'Asia/Taipei' };
+    scheduler.configure();
+    expect(scheduler.nextRun()).toBe('2026-11-18T04:00:00.000Z');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(run).toHaveBeenCalledTimes(1);
+    scheduler.stop();
+    await vi.advanceTimersByTimeAsync(8 * 86400000);
+    expect(run).toHaveBeenCalledTimes(1);
+  } finally {
+    scheduler.stop();
+  }
+});

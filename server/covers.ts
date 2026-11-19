@@ -41,7 +41,7 @@ export function isDirectlyLoadableCover(url?: string): boolean {
 const stripEditionSuffix = (s: string): string =>
   s.replace(/\s*(?:\((?:explicit|deluxe[^)]*)\)|-\s*(?:ep|single))$/i, '').trim();
 
-function titleMatches(candidate: string | undefined, albumTitle: string): boolean {
+export function titleMatches(candidate: string | undefined, albumTitle: string): boolean {
   if (!candidate) return false;
   const target = normalizeIdentity(albumTitle);
   if (!target) return false;
@@ -51,7 +51,7 @@ function titleMatches(candidate: string | undefined, albumTitle: string): boolea
   return Boolean(cleanTarget && cleanCandidate === cleanTarget);
 }
 
-function artistMatches(candidate: string | undefined, albumArtist: string): boolean {
+export function artistMatches(candidate: string | undefined, albumArtist: string): boolean {
   if (!candidate) return false;
   const target = normalizeIdentity(albumArtist);
   const cand = normalizeIdentity(candidate);

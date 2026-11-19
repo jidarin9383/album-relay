@@ -15,11 +15,13 @@ async function render() {
   if (document.activeElement !== $('server')) $('server').value = s.server || '';
   if (document.activeElement !== $('token')) $('token').value = s.token || '';
   const refresh = s.config?.refresh;
+  const backfill = s.config?.detailBackfill;
   const rows = [
-    ['状态', refresh ? (refresh.enabled ? `已开启，每天 ${refresh.hour}:00 之后执行一次` : '未开启') : '尚未从 Album Relay 读取设置'],
-    ['页面', refresh?.targets?.length ? refresh.targets.join('\n') : '—'],
-    ['上次执行', s.run ? `${time(s.run.startedAt)} · ${RUN[s.run.status] || s.run.status}` : '—'],
-    ['最后联系', s.lastError ? `${time(s.lastContact)}（最近一次失败：${s.lastError}）` : time(s.lastContact)]
+    ['巡检状态', refresh ? (refresh.enabled ? `已开启，每天 ${refresh.hour}:00 后执行` : '未开启') : '尚未读取新声簿配置'],
+    ['巡检页面', refresh?.targets?.length ? refresh.targets.join('\n') : '—'],
+    ['详情补抓', backfill?.enabled ? `已开启（每批 ${backfill.batchSize} 页 · 待补 ${backfill.pendingCount ?? 0} 个链接）` : '未开启'],
+    ['上次巡检', s.run ? `${time(s.run.startedAt)} · ${RUN[s.run.status] || s.run.status}` : '—'],
+    ['最近联系', s.lastError ? `${time(s.lastContact)}（失败：${s.lastError}）` : time(s.lastContact)]
   ];
   $('refresh').replaceChildren(...rows.flatMap(([k, v]) => {
     const dt = document.createElement('dt'); dt.textContent = k;
@@ -64,14 +66,21 @@ $('save').addEventListener('click', async () => {
   const result = await chrome.runtime.sendMessage({ type: 'tick-now' });
   const { lastError } = await chrome.storage.local.get('lastError');
   if (result?.error || lastError) show(`连接失败：${result?.error || lastError}`, 'error');
-  else show('已连接。之后打开支持的页面会自动收录，扩展图标上会显示 ✓ / ! / ✗。', 'ok');
+  else show('已连接。之后打开支持的页面将自动收录，图标会显示 ✓ / ! / ✗。', 'ok');
   await render();
 });
 
 $('run').addEventListener('click', async () => {
   const result = await chrome.runtime.sendMessage({ type: 'run-now' });
   if (result?.error) show(result.error, 'error');
-  else show('已开始：会在后台标签页里依次打开配置的页面，每页间隔 30–75 秒。', 'ok');
+  else show('已开始巡检：将在后台逐页打开配置页面，每页间隔 30–75 秒。', 'ok');
+  await render();
+});
+
+$('backfill').addEventListener('click', async () => {
+  const result = await chrome.runtime.sendMessage({ type: 'backfill-now' });
+  if (result?.error) show(result.error, 'error');
+  else show('已开始低频补抓入选专辑详情页（间隔 30–75 秒），遇验证即停。', 'ok');
   await render();
 });
 
