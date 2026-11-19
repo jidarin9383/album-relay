@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { z } from 'zod';
+import { isSameAiEndpoint, normalizeAiBaseUrl } from '../../shared/ai-endpoint.js';
 import type { AiConnectionCheck, AiProviderKind, AiSettings } from '../../shared/types.js';
 import type { Store } from '../store.js';
 
@@ -10,9 +11,9 @@ export const GEMINI_DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.co
 export const GEMINI_DEFAULT_MODEL = 'gemini-4-hydrogen';
 export const GEMINI_RECOMMENDED_MODELS = [
   'gemini-4-hydrogen',
-  'gemini-4-argon',
+  'gemini-3.8-flash',
   'gemini-3.5-flash-lite',
-  'gemini-4-carbon'
+  'gemini-4-argon'
 ] as const;
 
 export const DEFAULT_AI_SETTINGS: Omit<AiSettings, 'hasApiKey'> = {
@@ -54,7 +55,7 @@ export interface GeminiSdkClient {
         generation_config?: Record<string, unknown>;
       },
       options?: { timeout_ms?: number }
-    ): Promise<{ output_text?: string | null; steps?: unknown[] }>;
+    ): Promise<{ status?: string; output_text?: string | null; steps?: unknown[] }>;
   };
 }
 
@@ -74,22 +75,6 @@ const defaultGeminiFactory: GeminiClientFactory = ({ apiKey, baseUrl, timeoutMs 
     }
   }) as unknown as GeminiSdkClient;
 };
-
-export function normalizeAiBaseUrl(raw: string, provider: AiProviderKind): string {
-  const trimmed = raw.trim().replace(/\/+$/, '');
-  const parsed = new URL(trimmed);
-  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
-    throw new Error('模型服务地址仅支持有效的 http/https 地址，且不能包含用户名或密码');
-  }
-  if (provider === 'ollama' && (parsed.pathname === '/' || parsed.pathname === '')) {
-    return `${parsed.origin}/v1`;
-  }
-  if (provider === 'gemini') {
-    const cleanPath = parsed.pathname.replace(/\/(?:v1|v1beta|v1alpha)\/?$/i, '').replace(/\/+$/, '');
-    return `${parsed.origin}${cleanPath === '/' ? '' : cleanPath}`;
-  }
-  return `${parsed.origin}${parsed.pathname === '/' ? '' : parsed.pathname}`.replace(/\/+$/, '');
-}
 
 function ollamaOriginFromBaseUrl(baseUrl: string): string {
   const parsed = new URL(baseUrl);
@@ -150,11 +135,14 @@ export function saveAiSettings(
     timeoutMs: Math.max(5_000, Math.min(180_000, Math.round(input.timeoutMs)))
   };
   store.transaction(() => {
+    const keepSavedKey = isSameAiEndpoint(getAiSettings(store), stored);
     store.setValue(AI_SETTINGS_KEY, JSON.stringify(stored));
     if (input.clearApiKey) {
       store.deleteValue(AI_API_KEY_STORAGE);
     } else if (typeof input.apiKey === 'string' && input.apiKey.trim()) {
       store.setValue(AI_API_KEY_STORAGE, input.apiKey.trim());
+    } else if (!keepSavedKey) {
+      store.deleteValue(AI_API_KEY_STORAGE);
     }
   });
   return getAiSettings(store);
@@ -247,13 +235,83 @@ function rankAndFilterGeminiModels(rawNames: string[]): string[] {
   return pool.sort((a, b) => priority(a) - priority(b) || a.localeCompare(b));
 }
 
-function sanitizeErrorMessage(err: unknown, apiKey: string | null): string {
-  const raw = err instanceof Error ? err.message : String(err ?? '模型请求失败');
-  let safe = raw
+function redactSecrets(text: string, apiKey: string | null): string {
+  let safe = text
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer [REDACTED]')
     .replace(/([?&]key=)[^&\s]+/gi, '$1[REDACTED]');
   if (apiKey && apiKey.length >= 4) safe = safe.split(apiKey).join('[REDACTED]');
-  return safe.slice(0, 240);
+  return safe;
+}
+
+function extractUpstreamErrorDetail(err: unknown, apiKey: string | null): string {
+  if (!err || typeof err !== 'object') return '';
+  const rec = err as { body?: unknown; error?: { message?: unknown; code?: unknown } };
+  const nestedMsg = rec.error?.message;
+  if (typeof nestedMsg === 'string' && nestedMsg.trim()) {
+    return redactSecrets(nestedMsg.trim(), apiKey);
+  }
+  if (typeof rec.body === 'string' && rec.body.trim()) {
+    const trimmed = rec.body.trim();
+    try {
+      const parsed = JSON.parse(trimmed) as {
+        error?: { message?: unknown; code?: unknown; status?: unknown };
+        message?: unknown;
+        detail?: unknown;
+      };
+      const candidate = parsed?.error?.message ?? parsed?.message ?? parsed?.detail ?? parsed?.error?.code;
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return redactSecrets(candidate.trim(), apiKey);
+      }
+    } catch {
+      // Fall through to plain body text.
+    }
+    return redactSecrets(trimmed, apiKey);
+  }
+  return '';
+}
+
+function sanitizeErrorMessage(err: unknown, apiKey: string | null): string {
+  const rec = err && typeof err === 'object' ? (err as { statusCode?: unknown; status?: unknown }) : {};
+  const rawMessage = err instanceof Error ? err.message : String(err ?? '模型请求失败');
+  const redactedRaw = redactSecrets(rawMessage, apiKey);
+  const cleanedRaw = redactedRaw
+    .replace(/\bAPI error occurred:\s*\{\s*"httpMeta"\s*:[\s\S]*$/i, '')
+    .trim();
+  const detail = extractUpstreamErrorDetail(err, apiKey);
+
+  const numericStatus =
+    typeof rec.statusCode === 'number'
+      ? rec.statusCode
+      : typeof rec.status === 'number'
+        ? rec.status
+        : (() => {
+            const m = /\b(400|401|402|403|404|405|429|500|502|503|504)\b/.exec(redactedRaw);
+            return m ? Number(m[1]) : undefined;
+          })();
+
+  const extra = detail || (cleanedRaw && !/^\d{3}$/.test(cleanedRaw) ? cleanedRaw : '');
+  const appendDetail = (prefix: string) =>
+    (extra && !prefix.includes(extra) ? `${prefix}（详情：${extra}）` : prefix).slice(0, 260);
+
+  if (numericStatus === 402 || /payment_required/i.test(extra)) {
+    return appendDetail(
+      'HTTP 402（计费或额度受限）：当前 Gemini 项目的 Prepay 预付费余额不足，或所选模型不支持免费层。请到 Google AI Studio → Billing 充值余额，或切换支持免费层的模型（如 gemini-3.8-flash / gemini-3.5-flash-lite），也可切回本地 Ollama'
+    );
+  }
+  if (numericStatus === 401) {
+    return appendDetail('HTTP 401（鉴权失败）：API Key 无效或已过期，请检查密钥');
+  }
+  if (numericStatus === 403) {
+    return appendDetail('HTTP 403（权限或地区受限）：当前 API Key 无权调用该模型，或所在出口地区受限');
+  }
+  if (numericStatus === 404) {
+    return appendDetail('HTTP 404（模型或接口不存在）：请确认模型名称正确，或点击「测试连接」从可用列表点选');
+  }
+  if (numericStatus === 429) {
+    return appendDetail('HTTP 429（频率或配额超限）：请求过于频繁或当前免费配额已用尽，请稍后重试或换模型');
+  }
+
+  return (extra || cleanedRaw || redactedRaw || '模型请求失败').slice(0, 240);
 }
 
 export class DefaultLlmClient implements LlmClient {
@@ -266,6 +324,28 @@ export class DefaultLlmClient implements LlmClient {
     this.createGeminiClient = geminiFactory ?? defaultGeminiFactory;
   }
 
+  private async probeGeminiModel(ai: GeminiSdkClient, model: string): Promise<void> {
+    const prompt = { model, input: 'Reply with OK.', store: false };
+    const options = { timeout_ms: 10_000 };
+    let interaction;
+    try {
+      interaction = await ai.interactions.create(
+        { ...prompt, generation_config: { max_output_tokens: 64 } },
+        options
+      );
+    } catch (err) {
+      const msg = sanitizeErrorMessage(err, null);
+      if (!/\b400\b|INVALID_ARGUMENT|max_output_tokens/i.test(msg)) throw err;
+      interaction = await ai.interactions.create(prompt, options);
+    }
+    if (interaction.status !== 'completed') {
+      throw new Error('Gemini 未完成测试生成');
+    }
+    if (!extractGeminiOutputText(interaction).trim()) {
+      throw new Error('Gemini 测试生成未返回文本');
+    }
+  }
+
   async checkConnection(settings: AiSettings, apiKey: string | null): Promise<AiConnectionCheck> {
     const checkedAt = new Date().toISOString();
 
@@ -275,6 +355,7 @@ export class DefaultLlmClient implements LlmClient {
       }
       const baseUrl = normalizeAiBaseUrl(settings.baseUrl || GEMINI_DEFAULT_BASE_URL, 'gemini');
       const ai = this.createGeminiClient({ apiKey: apiKey.trim(), baseUrl, timeoutMs: 10_000 });
+      const targetModel = settings.model.trim() || GEMINI_DEFAULT_MODEL;
       try {
         const pager = await ai.models.list({
           config: { pageSize: 100, abortSignal: AbortSignal.timeout(8_000) }
@@ -285,29 +366,31 @@ export class DefaultLlmClient implements LlmClient {
         }
         const ranked = rankAndFilterGeminiModels(discovered);
         const models = ranked.length ? ranked : [...GEMINI_RECOMMENDED_MODELS];
-        return {
-          ok: true,
-          message: discovered.length ? `Gemini 连接成功 · 发现 ${models.length} 个可用模型` : 'Gemini 接口连接成功',
-          models,
-          checkedAt
-        };
+        try {
+          await this.probeGeminiModel(ai, targetModel);
+          return {
+            ok: true,
+            message: `Gemini 模型「${targetModel}」实测可用`,
+            models,
+            checkedAt
+          };
+        } catch (probeErr) {
+          return {
+            ok: false,
+            message: `模型「${targetModel}」不可用：${sanitizeErrorMessage(probeErr, apiKey)}`,
+            models,
+            checkedAt
+          };
+        }
       } catch (listErr) {
         const msg = sanitizeErrorMessage(listErr, apiKey);
         if (/\b(404|405)\b/.test(msg)) {
           try {
-            await ai.interactions.create(
-              {
-                model: settings.model || GEMINI_DEFAULT_MODEL,
-                input: 'ping',
-                store: false,
-                generation_config: { max_output_tokens: 8 }
-              },
-              { timeout_ms: 10_000 }
-            );
+            await this.probeGeminiModel(ai, targetModel);
             return {
               ok: true,
-              message: `Gemini 接口连通测试成功（模型：${settings.model || GEMINI_DEFAULT_MODEL}）`,
-              models: [settings.model || GEMINI_DEFAULT_MODEL],
+              message: `Gemini 接口连通测试成功（模型：${targetModel}）`,
+              models: [targetModel],
               checkedAt
             };
           } catch (pingErr) {

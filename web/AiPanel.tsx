@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Bot, Check, Cpu, KeyRound, LoaderCircle, Radio, Sparkles } from 'lucide-react';
+import { Check, ChevronRight, LoaderCircle } from 'lucide-react';
+import { isSameAiEndpoint } from '../shared/ai-endpoint';
 import type { AiConnectionCheck, AiProviderKind, AiSettings } from '../shared/types';
 
 interface Props {
@@ -7,63 +8,104 @@ interface Props {
   onSaved?: (settings: AiSettings) => void;
 }
 
-const GEMINI_RECOMMENDED_MODELS = ['gemini-4-hydrogen', 'gemini-4-argon', 'gemini-3.5-flash-lite', 'gemini-4-carbon'];
+const GEMINI_RECOMMENDED_MODELS = ['gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-4-argon'];
 const OLLAMA_RECOMMENDED_MODELS = ['qwen3.6:35b-a3b-mxfp8', 'qwen3.5:4b', 'qwen3.8:27b-mlx'];
+const OPENAI_RECOMMENDED_MODELS = ['gpt-4o-mini', 'gpt-4.1-mini', 'deepseek-chat'];
 
 type ProviderDraft = { baseUrl: string; model: string };
 
 const PROVIDER_META: Record<
   AiProviderKind,
-  { title: string; subtitle: string; defaultUrl: string; defaultModel: string }
+  {
+    title: string;
+    subtitle: string;
+    defaultUrl: string;
+    defaultModel: string;
+    keyPlaceholder: string;
+    defaultTimeoutMs: number;
+  }
 > = {
   ollama: {
-    title: 'Ollama 本地 / NAS',
-    subtitle: '本机或 Tailscale 局域网零成本私有运行',
+    title: 'Ollama 本地',
+    subtitle: '本机或局域网私有运行',
     defaultUrl: 'http://127.0.0.1:11434/v1',
-    defaultModel: 'qwen3.6:35b-a3b-mxfp8'
+    defaultModel: 'qwen3.6:35b-a3b-mxfp8',
+    keyPlaceholder: '仅在网关鉴权时填写',
+    defaultTimeoutMs: 60000
   },
   gemini: {
-    title: 'Google Gemini API',
-    subtitle: '官方 Interactions API · 结构化 JSON 输出',
+    title: 'Google Gemini',
+    subtitle: 'Google 官方模型服务',
     defaultUrl: 'https://generativelanguage.googleapis.com',
-    defaultModel: 'gemini-4-hydrogen'
+    defaultModel: 'gemini-4-hydrogen',
+    keyPlaceholder: 'AIza...',
+    defaultTimeoutMs: 45000
   },
   openai_compatible: {
-    title: 'OpenAI 兼容 API',
-    subtitle: 'OpenAI 或兼容 /v1/chat/completions 服务',
+    title: 'OpenAI 兼容',
+    subtitle: '兼容 OpenAI 格式接口',
     defaultUrl: 'https://api.openai.com/v1',
-    defaultModel: 'gpt-4o-mini'
+    defaultModel: 'gpt-4o-mini',
+    keyPlaceholder: 'sk-...',
+    defaultTimeoutMs: 45000
   }
 };
 
-function formatActiveEngineSummary(s: AiSettings | null): string {
-  if (!s) return '正在读取…';
-  if (!s.enabled) return `未启用（当前表单预设：${PROVIDER_META[s.provider].title} · ${s.model}）`;
-  const hostNote =
-    s.provider === 'ollama'
-      ? s.baseUrl.includes('127.0.0.1') || s.baseUrl.includes('localhost')
-        ? '本机 Ollama'
-        : '远程 Ollama'
-      : PROVIDER_META[s.provider].title;
-  return `${hostNote} · ${s.model}`;
+function initialProviderDrafts(saved?: AiSettings): Record<AiProviderKind, ProviderDraft> {
+  const drafts = {
+    ollama: { baseUrl: PROVIDER_META.ollama.defaultUrl, model: PROVIDER_META.ollama.defaultModel },
+    gemini: { baseUrl: PROVIDER_META.gemini.defaultUrl, model: PROVIDER_META.gemini.defaultModel },
+    openai_compatible: {
+      baseUrl: PROVIDER_META.openai_compatible.defaultUrl,
+      model: PROVIDER_META.openai_compatible.defaultModel
+    }
+  };
+  if (saved) drafts[saved.provider] = { baseUrl: saved.baseUrl, model: saved.model };
+  return drafts;
+}
+
+function formatHostSummary(url: string, timeoutMs: number): string {
+  const trimmed = url.trim();
+  let hostLabel = trimmed;
+  try {
+    hostLabel = new URL(trimmed).host || trimmed;
+  } catch {
+    hostLabel = trimmed || '未设置地址';
+  }
+  const secs = Math.max(1, Math.round((Number(timeoutMs) || 45000) / 1000));
+  return `${hostLabel} · ${secs}s`;
+}
+
+function detectOllamaHostPreset(url: string): 'local' | 'remote' | 'custom' {
+  const normalized = url.trim().replace(/\/+$/, '');
+  if (normalized === 'http://ollama-host.example:11434/v1') return 'remote';
+  if (
+    normalized === 'http://127.0.0.1:11434/v1' ||
+    normalized === 'http://127.0.0.1:11434' ||
+    normalized === 'http://localhost:11434/v1' ||
+    normalized === 'http://localhost:11434'
+  ) {
+    return 'local';
+  }
+  return 'custom';
 }
 
 export function AiPanel({ request, onSaved }: Props) {
   const [savedSettings, setSavedSettings] = useState<AiSettings | null>(null);
   const [settings, setSettings] = useState<AiSettings | null>(null);
-  const [draftsByProvider, setDraftsByProvider] = useState<Record<AiProviderKind, ProviderDraft>>({
-    ollama: { baseUrl: PROVIDER_META.ollama.defaultUrl, model: PROVIDER_META.ollama.defaultModel },
-    gemini: { baseUrl: PROVIDER_META.gemini.defaultUrl, model: PROVIDER_META.gemini.defaultModel },
-    openai_compatible: { baseUrl: PROVIDER_META.openai_compatible.defaultUrl, model: PROVIDER_META.openai_compatible.defaultModel }
-  });
+  const [draftsByProvider, setDraftsByProvider] = useState(initialProviderDrafts);
   const [apiKey, setApiKey] = useState('');
   const [clearApiKey, setClearApiKey] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [customOllamaSelected, setCustomOllamaSelected] = useState(false);
   const [checkResult, setCheckResult] = useState<AiConnectionCheck | null>(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const onSavedRef = useRef(onSaved);
   onSavedRef.current = onSaved;
+  const baseUrlInputRef = useRef<HTMLInputElement>(null);
+  const checkRevision = useRef(0);
 
   const syncSaved = useCallback((loaded: AiSettings) => {
     setSavedSettings(loaded);
@@ -72,6 +114,10 @@ export function AiPanel({ request, onSaved }: Props) {
       ...prev,
       [loaded.provider]: { baseUrl: loaded.baseUrl, model: loaded.model }
     }));
+    if (loaded.provider === 'ollama' && detectOllamaHostPreset(loaded.baseUrl) === 'custom') {
+      setCustomOllamaSelected(true);
+      setAdvancedOpen(true);
+    }
   }, []);
 
   const load = useCallback(async () => {
@@ -84,26 +130,32 @@ export function AiPanel({ request, onSaved }: Props) {
     void load().catch((e) => setError(e instanceof Error ? e.message : 'AI 配置加载失败'));
   }, [load]);
 
+  useEffect(() => {
+    checkRevision.current++;
+    setCheckResult(null);
+  }, [settings?.provider, settings?.baseUrl, settings?.model, apiKey, clearApiKey]);
+
   if (!settings || !savedSettings) return null;
 
   const switchProvider = (nextProvider: AiProviderKind) => {
+    if (nextProvider === settings.provider) return;
     setDraftsByProvider((prev) => ({
       ...prev,
       [settings.provider]: { baseUrl: settings.baseUrl, model: settings.model }
     }));
-    const targetDraft =
-      settings.provider === nextProvider
-        ? { baseUrl: settings.baseUrl, model: settings.model }
-        : draftsByProvider[nextProvider] ?? {
-            baseUrl: PROVIDER_META[nextProvider].defaultUrl,
-            model: PROVIDER_META[nextProvider].defaultModel
-          };
+    const targetDraft = draftsByProvider[nextProvider];
+    const nextIsCustomOllama = nextProvider === 'ollama' && detectOllamaHostPreset(targetDraft.baseUrl) === 'custom';
+    setCustomOllamaSelected(nextIsCustomOllama);
+    if (nextIsCustomOllama) setAdvancedOpen(true);
+
     setSettings({
       ...settings,
       provider: nextProvider,
       baseUrl: targetDraft.baseUrl,
       model: targetDraft.model
     });
+    setApiKey('');
+    setClearApiKey(false);
     setCheckResult(null);
     setNotice('');
     setError('');
@@ -118,6 +170,19 @@ export function AiPanel({ request, onSaved }: Props) {
     savedSettings.timeoutMs !== settings.timeoutMs ||
     Boolean(apiKey.trim()) ||
     clearApiKey;
+
+  const discardDraft = () => {
+    setSettings(savedSettings);
+    setDraftsByProvider(initialProviderDrafts(savedSettings));
+    setCustomOllamaSelected(
+      savedSettings.provider === 'ollama' && detectOllamaHostPreset(savedSettings.baseUrl) === 'custom'
+    );
+    setApiKey('');
+    setClearApiKey(false);
+    setCheckResult(null);
+    setError('');
+    setNotice('已恢复为当前运行的已保存配置。');
+  };
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -146,8 +211,8 @@ export function AiPanel({ request, onSaved }: Props) {
       onSaved?.(res.settings);
       setNotice(
         res.settings.enabled
-          ? `已切换并保存：当前全站 AI 分析与月度歌单将使用 ${PROVIDER_META[res.settings.provider].title}（${res.settings.model}）。`
-          : '配置已保存（AI 功能当前处于停用状态）。'
+          ? `已保存配置：${PROVIDER_META[res.settings.provider].title} · ${res.settings.model}。`
+          : '已保存 · AI 策展与乐评当前处于停用状态。'
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : '保存失败');
@@ -158,7 +223,9 @@ export function AiPanel({ request, onSaved }: Props) {
 
   async function testConnection() {
     if (!settings) return;
+    const revision = checkRevision.current;
     setBusy('check');
+    setCheckResult(null);
     setError('');
     setNotice('');
     try {
@@ -166,14 +233,12 @@ export function AiPanel({ request, onSaved }: Props) {
         provider: settings.provider,
         baseUrl: settings.baseUrl,
         model: settings.model,
-        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {})
+        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+        ...(clearApiKey ? { clearApiKey: true } : {})
       });
-      setCheckResult(res);
-      if (res.ok && res.models.length && !res.models.includes(settings.model)) {
-        setSettings((cur) => (cur ? { ...cur, model: res.models[0]! } : cur));
-      }
+      if (revision === checkRevision.current) setCheckResult(res);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '连接测试失败');
+      if (revision === checkRevision.current) setError(err instanceof Error ? err.message : '连接测试失败');
     } finally {
       setBusy('');
     }
@@ -187,214 +252,314 @@ export function AiPanel({ request, onSaved }: Props) {
       const res = await request<{ queuedCount: number; totalSelected: number }>('/ai/reviews/generate-selected', {});
       setNotice(
         res.queuedCount
-          ? `已加入后台生成（${res.queuedCount} 张专辑），将使用当前生效引擎「${savedSettings?.model}」。`
+          ? `已加入后台补全队列（${res.queuedCount} 张专辑），当前引擎「${savedSettings?.model}」。`
           : `全部 ${res.totalSelected} 张入选专辑已有最新乐评。`
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : '批量生成失败');
+      setError(err instanceof Error ? err.message : '批量补全失败');
     } finally {
       setBusy('');
     }
   }
 
-  const normalizedUrl = settings.baseUrl.replace(/\/+$/, '');
-  const ollamaHostMode =
-    normalizedUrl === 'http://ollama-host.example:11434/v1'
-      ? 'nas'
-      : normalizedUrl === 'http://127.0.0.1:11434/v1' || normalizedUrl === 'http://127.0.0.1:11434'
-        ? 'local'
-        : 'custom';
+  const detectedOllamaHost = detectOllamaHostPreset(settings.baseUrl);
+  const ollamaHostMode = customOllamaSelected ? 'custom' : detectedOllamaHost;
 
   const quickModels =
     settings.provider === 'gemini'
       ? GEMINI_RECOMMENDED_MODELS
       : settings.provider === 'ollama'
         ? OLLAMA_RECOMMENDED_MODELS
-        : [];
+        : OPENAI_RECOMMENDED_MODELS;
+
+  const isOllama = settings.provider === 'ollama';
+  const liveMeta = PROVIDER_META[savedSettings.provider];
+  const draftMeta = PROVIDER_META[settings.provider];
+  const switchingProvider = settings.enabled && savedSettings.enabled && settings.provider !== savedSettings.provider;
+  const sameEndpoint = isSameAiEndpoint(savedSettings, settings);
+  const keyAppliesToDraft = sameEndpoint && savedSettings.hasApiKey;
+  const showClearButton = Boolean(apiKey.trim()) || keyAppliesToDraft || clearApiKey;
+
+  const handleClearKeyToggle = () => {
+    if (apiKey.trim()) {
+      setApiKey('');
+      return;
+    }
+    if (keyAppliesToDraft || clearApiKey) {
+      setClearApiKey((cur) => !cur);
+    }
+  };
+
+  let dirtyText = '';
+  if (isDirty) {
+    if (!savedSettings.enabled && settings.enabled) {
+      dirtyText = `有未保存更改 · 当前 AI 乐评未启用，保存后将启用「${draftMeta.title}」`;
+    } else if (savedSettings.enabled && !settings.enabled) {
+      dirtyText = `有未保存更改 · 当前仍以「${liveMeta.title}」运行，保存后停用`;
+    } else if (settings.provider !== savedSettings.provider) {
+      dirtyText = `有未保存更改 · 当前仍以「${liveMeta.title}」运行，保存后切换`;
+    } else {
+      dirtyText = `有未保存更改 · 当前仍以「${liveMeta.title} · ${savedSettings.model}」运行，保存后生效`;
+    }
+    if (!sameEndpoint && savedSettings.hasApiKey) {
+      dirtyText += '。保存新服务地址后会移除旧密钥。';
+    }
+  }
+
+  let keyHint = '尚未保存密钥，请输入有效的服务密钥';
+  if (clearApiKey) {
+    keyHint = '已标记清除旧密钥，保存后生效';
+  } else if (apiKey.trim()) {
+    keyHint = '保存后将更新为新填写的密钥';
+  } else if (keyAppliesToDraft) {
+    keyHint = '已保存于本机，留空将继续沿用现有密钥';
+  }
 
   return (
-    <section className="rules-section" aria-labelledby="ai-heading">
-      <div className="section-bar">
-        <div className="od-cluster" style={{ '--od-gap': '10px' } as React.CSSProperties}>
-          <h2 id="ai-heading" className="cjk-heading" style={{ fontSize: 'var(--text-h2)' }}>
-            AI 策展与乐评引擎
+    <section
+      className={`rules-section ai-settings-card ${!settings.enabled ? 'is-disabled' : ''}`}
+      aria-labelledby="ai-heading"
+    >
+      {/* Single Calm Header Bar */}
+      <div className="section-bar ai-card-header">
+        <div className="ai-header-left">
+          <h2 id="ai-heading" className="ai-card-title cjk-heading">
+            AI 策展与乐评
           </h2>
-          <span className={`badge ${savedSettings.enabled ? 'badge-pass' : 'badge-excluded'}`}>
-            {savedSettings.enabled ? '已启用' : '未启用'}
-          </span>
-        </div>
-        <span className="mono-num field-hint">
-          {savedSettings.enabled ? formatActiveEngineSummary(savedSettings) : '规则模式（未启用 AI）'}
-        </span>
-      </div>
-
-      {/* Unmistakable Current Active vs Unsaved Draft Status Banner */}
-      <div className={`ai-active-banner ${savedSettings.enabled ? 'is-enabled' : 'is-off'} ${isDirty ? 'is-dirty' : ''}`}>
-        <div className="od-row" style={{ '--od-gap': '8px', flexWrap: 'wrap' } as React.CSSProperties}>
-          <span className={`status-dot ${savedSettings.enabled ? '' : 'is-offline'}`} aria-hidden="true" />
-          <strong style={{ fontSize: 'var(--text-sm)' }}>当前正在使用的分析引擎：</strong>
-          <span className="mono-num" style={{ fontSize: 'var(--text-sm)', color: 'var(--ink-primary)' }}>
-            {formatActiveEngineSummary(savedSettings)}
-          </span>
-        </div>
-        {isDirty ? (
-          <span className="badge badge-watch">草稿未保存：当前编辑的是「{PROVIDER_META[settings.provider].title}」，点击下方「保存配置」后生效</span>
-        ) : (
-          <span className="field-hint">乐评生成、品味画像与月度歌单导语均以此引擎运行</span>
-        )}
-      </div>
-
-      <div className="od-stack" style={{ '--od-gap': '16px' } as React.CSSProperties}>
-        {/* Step 1: 3 Clear Engine Cards */}
-        <div className="od-field" style={{ '--od-gap': '8px' } as React.CSSProperties}>
-          <span className="field-label">第一步：选择 AI 模型引擎</span>
-          <div className="ai-engine-cards" role="radiogroup" aria-label="选择 AI 模型引擎">
-            {(['ollama', 'gemini', 'openai_compatible'] as AiProviderKind[]).map((kind) => {
-              const meta = PROVIDER_META[kind];
-              const isSelected = settings.provider === kind;
-              const isLive = savedSettings.enabled && savedSettings.provider === kind;
-              return (
-                <button
-                  key={kind}
-                  type="button"
-                  role="radio"
-                  aria-checked={isSelected}
-                  className={`ai-engine-card ${isSelected ? 'is-selected' : ''} ${isLive ? 'is-live' : ''}`}
-                  onClick={() => switchProvider(kind)}
-                >
-                  <div className="od-row" style={{ justifyContent: 'space-between', width: '100%' }}>
-                    <span className="od-row" style={{ '--od-gap': '6px', fontWeight: 600, fontSize: 'var(--text-sm)' } as React.CSSProperties}>
-                      {kind === 'ollama' ? <Cpu size={15} /> : kind === 'gemini' ? <Sparkles size={15} /> : <Bot size={15} />}
-                      <span>{meta.title}</span>
-                    </span>
-                    {isLive ? (
-                      <span className="badge badge-pass">当前生效</span>
-                    ) : isSelected ? (
-                      <span className="badge badge-split">正在配置</span>
-                    ) : null}
-                  </div>
-                  <p className="ai-engine-card-sub">{meta.subtitle}</p>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <form onSubmit={(e) => void save(e)} className="od-stack" style={{ '--od-gap': '16px' } as React.CSSProperties}>
-          {settings.provider === 'ollama' && (
-            <div className="od-field" style={{ '--od-gap': '6px' } as React.CSSProperties}>
-              <span className="field-hint">Ollama 连接方式：</span>
-              <div className="ai-preset-bar">
-                <button
-                  type="button"
-                  className={`ai-preset-btn ${ollamaHostMode === 'local' ? 'is-active' : ''}`}
-                  onClick={() => setSettings({ ...settings, baseUrl: 'http://127.0.0.1:11434/v1' })}
-                >
-                  <Cpu size={13} />
-                  <span>本机 Ollama (127.0.0.1:11434)</span>
-                </button>
-                <button
-                  type="button"
-                  className={`ai-preset-btn ${ollamaHostMode === 'nas' ? 'is-active' : ''}`}
-                  onClick={() => setSettings({ ...settings, baseUrl: 'http://ollama-host.example:11434/v1' })}
-                >
-                  <Cpu size={13} />
-                  <span>另一台设备（填写实际地址）</span>
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="ai-toggles-strip">
-            <label className="toggle-wrap">
-              <input
-                type="checkbox"
-                className="toggle-input"
-                checked={settings.enabled}
-                onChange={(e) => setSettings({ ...settings, enabled: e.target.checked })}
-              />
-              <span>启用「{PROVIDER_META[settings.provider].title}」参与策展与乐评</span>
-            </label>
-            <label className="toggle-wrap">
-              <input
-                type="checkbox"
-                className="toggle-input"
-                checked={settings.autoReviewSelected}
-                onChange={(e) => setSettings({ ...settings, autoReviewSelected: e.target.checked })}
-              />
-              <span>新专辑入选后自动后台生成乐评</span>
-            </label>
-          </div>
-
-          <div className="ai-config-grid">
-            <label className="form-field" style={{ gridColumn: 'span 2' }}>
-              <span className="field-label">
-                {settings.provider === 'gemini' ? 'Gemini API 地址（默认官方无需修改）' : '接口地址 (Base URL)'}
+          <span className="ai-live-indicator" aria-live="polite">
+            <span className={`ai-live-dot ${savedSettings.enabled ? '' : 'is-off'}`} aria-hidden="true" />
+            {savedSettings.enabled ? (
+              <span className="ai-live-text">
+                <span>运行中 · {liveMeta.title}</span>
+                <span aria-hidden="true">·</span>
+                <span className="ai-live-model mono-num">{savedSettings.model}</span>
               </span>
-              <input
-                required
-                className="input-control mono-num"
-                value={settings.baseUrl}
-                onChange={(e) => setSettings({ ...settings, baseUrl: e.target.value })}
-                placeholder={PROVIDER_META[settings.provider].defaultUrl}
-              />
-            </label>
+            ) : (
+              <span className="ai-live-text">未启用</span>
+            )}
+          </span>
+        </div>
 
-            <label className="form-field">
-              <span className="field-label">模型名称</span>
-              <input
-                required
-                className="input-control mono-num"
-                value={settings.model}
-                onChange={(e) => setSettings({ ...settings, model: e.target.value })}
-                placeholder={PROVIDER_META[settings.provider].defaultModel}
-              />
-            </label>
+        <label className="toggle-wrap ai-master-toggle" htmlFor="ai-enabled-toggle">
+          <span>{settings.enabled ? '已启用' : '已关闭'}</span>
+          <input
+            id="ai-enabled-toggle"
+            type="checkbox"
+            className="toggle-input"
+            checked={settings.enabled}
+            onChange={(e) => setSettings({ ...settings, enabled: e.target.checked })}
+          />
+        </label>
+      </div>
 
-            <div className="form-field" style={{ gridColumn: 'span 2' }}>
-              <div className="od-row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', '--od-gap': '6px' } as React.CSSProperties}>
-                <label className="field-label" htmlFor="ai-apikey-input">
-                  <span className="od-row" style={{ '--od-gap': '5px' } as React.CSSProperties}>
-                    <KeyRound size={12} />
-                    <span>
-                      {settings.provider === 'gemini'
-                        ? 'Gemini API Key'
-                        : settings.provider === 'ollama'
-                          ? 'API Key（本地 Ollama 无需填写）'
-                          : 'API Key'}
+      {/* Dirty-Only Restrained Amber/Paper Notice */}
+      {isDirty && (
+        <div className="ai-dirty-notice" role="status" aria-live="polite">
+          <div className="ai-dirty-notice-main">
+            <span className="ai-dirty-dot" aria-hidden="true" />
+            <span>{dirtyText}</span>
+          </div>
+          <button type="button" className="ai-discard-btn" onClick={discardDraft}>
+            放弃更改
+          </button>
+        </div>
+      )}
+
+      <form onSubmit={(e) => void save(e)} className="ai-config-body">
+        {/* 3-Engine Selector Cards */}
+        <div className="ai-provider-grid" role="radiogroup" aria-label="选择 AI 分析引擎">
+          {(['ollama', 'gemini', 'openai_compatible'] as AiProviderKind[]).map((kind) => {
+            const meta = PROVIDER_META[kind];
+            const isSelected = settings.provider === kind;
+            const isLive = savedSettings.enabled && savedSettings.provider === kind;
+            return (
+              <button
+                key={kind}
+                type="button"
+                role="radio"
+                aria-checked={isSelected}
+                className={`ai-provider-card ${isSelected ? 'is-selected' : ''}`}
+                onClick={() => switchProvider(kind)}
+              >
+                <div className="ai-provider-card-head">
+                  <span className="ai-provider-name">{meta.title}</span>
+                  {isLive && (
+                    <span className="ai-running-micro">
+                      <span className="ai-running-micro-dot" aria-hidden="true" />
+                      <span>运行中</span>
                     </span>
-                  </span>
+                  )}
+                </div>
+                <span className="ai-provider-sub">{meta.subtitle}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Ollama Segmented Host Presets */}
+        {isOllama && (
+          <div className="ai-host-preset-row">
+            <span className="ai-host-preset-label">服务节点预设</span>
+            <div className="segmented-tabs" role="group" aria-label="Ollama 服务地址预设">
+              <button
+                type="button"
+                className={`seg-tab ${ollamaHostMode === 'local' ? 'is-active' : ''}`}
+                onClick={() => {
+                  setCustomOllamaSelected(false);
+                  setSettings({ ...settings, baseUrl: 'http://127.0.0.1:11434/v1' });
+                }}
+              >
+                本机 127.0.0.1
+              </button>
+              <button
+                type="button"
+                className={`seg-tab ${ollamaHostMode === 'remote' ? 'is-active' : ''}`}
+                onClick={() => {
+                  setCustomOllamaSelected(false);
+                  setSettings({ ...settings, baseUrl: 'http://ollama-host.example:11434/v1' });
+                }}
+              >
+                另一台设备（填写实际地址）
+              </button>
+              <button
+                type="button"
+                className={`seg-tab ${ollamaHostMode === 'custom' ? 'is-active' : ''}`}
+                onClick={() => {
+                  setCustomOllamaSelected(true);
+                  setAdvancedOpen(true);
+                  window.setTimeout(() => {
+                    baseUrlInputRef.current?.focus();
+                    baseUrlInputRef.current?.select();
+                  }, 20);
+                }}
+              >
+                自定义
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Primary 2-Column Form Row: Model (+ Paired Quick Chips) | API Key */}
+        <div className={`ai-primary-grid ${isOllama ? 'is-single-col' : ''}`}>
+          <div className="form-field">
+            <div className="ai-label-row">
+              <label className="field-label" htmlFor="ai-model-input">
+                模型名称
+              </label>
+            </div>
+            <input
+              id="ai-model-input"
+              required
+              className="input-control mono-num"
+              value={settings.model}
+              onChange={(e) => setSettings({ ...settings, model: e.target.value })}
+              placeholder={draftMeta.defaultModel}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            {quickModels.length > 0 && (
+              <div className="ai-quick-chips" role="group" aria-label="常用模型快捷切换">
+                {quickModels.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    aria-pressed={settings.model === m}
+                    className={`ai-quick-chip ${settings.model === m ? 'is-active' : ''}`}
+                    onClick={() => setSettings({ ...settings, model: m })}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {!isOllama && (
+            <div className="form-field">
+              <div className="ai-label-row">
+                <label className="field-label" htmlFor="ai-apikey-input">
+                  API Key
                 </label>
-                {settings.hasApiKey && (
-                  <label className="od-row" style={{ '--od-gap': '6px', fontSize: 'var(--text-xs)', color: 'var(--ink-secondary)', cursor: 'pointer' } as React.CSSProperties}>
-                    <input type="checkbox" checked={clearApiKey} onChange={(e) => setClearApiKey(e.target.checked)} />
-                    <span>清除密钥</span>
-                  </label>
+                {showClearButton && (
+                  <button
+                    type="button"
+                    className={`ai-inline-action-btn ${clearApiKey ? 'is-clearing' : ''}`}
+                    onClick={handleClearKeyToggle}
+                  >
+                    {clearApiKey ? '撤销清除' : '清除'}
+                  </button>
                 )}
               </div>
               <input
                 id="ai-apikey-input"
                 type="password"
                 className="input-control mono-num"
-                autoComplete="off"
+                autoComplete="new-password"
                 disabled={clearApiKey}
                 value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={
-                  settings.hasApiKey
-                    ? '已保存密钥（留空保留）'
-                    : settings.provider === 'gemini'
-                      ? 'AIza...'
-                      : settings.provider === 'ollama'
-                        ? '留空即可'
-                        : 'sk-...'
-                }
+                onChange={(e) => {
+                  setApiKey(e.target.value);
+                  if (e.target.value.trim()) setClearApiKey(false);
+                }}
+                placeholder={keyAppliesToDraft && !clearApiKey ? '已保存密钥（留空保留）' : draftMeta.keyPlaceholder}
               />
+              <span className="field-hint">{keyHint}</span>
             </div>
+          )}
+        </div>
 
-            <label className="form-field">
+        {/* Automation Preference Row */}
+        <label className="ai-auto-row" htmlFor="ai-auto-review-toggle">
+          <span className="ai-auto-copy">
+            <span className="ai-auto-title">新专辑入选后自动生成乐评</span>
+            <span className="ai-auto-desc">每轮新碟入选后自动补充唱片档案短评</span>
+          </span>
+          <input
+            id="ai-auto-review-toggle"
+            type="checkbox"
+            className="toggle-input"
+            checked={settings.autoReviewSelected}
+            onChange={(e) => setSettings({ ...settings, autoReviewSelected: e.target.checked })}
+          />
+        </label>
+
+        {/* Collapsible Advanced Parameters */}
+        <details
+          className="ai-advanced-disclosure"
+          open={advancedOpen}
+          onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
+        >
+          <summary className="ai-advanced-summary">
+            <span className="ai-advanced-summary-left">
+              <ChevronRight size={14} className="ai-disclosure-chevron" aria-hidden="true" />
+              <span>高级参数（接口地址与超时）</span>
+            </span>
+            <span className="ai-advanced-hint">{formatHostSummary(settings.baseUrl, settings.timeoutMs)}</span>
+          </summary>
+
+          <div className="ai-advanced-body">
+            <label className="form-field" htmlFor="ai-baseurl-input">
+              <span className="field-label">接口地址 (Base URL)</span>
+              <input
+                id="ai-baseurl-input"
+                ref={baseUrlInputRef}
+                required
+                className="input-control mono-num"
+                value={settings.baseUrl}
+                onChange={(e) => {
+                  setCustomOllamaSelected(false);
+                  setSettings({ ...settings, baseUrl: e.target.value });
+                }}
+                placeholder={draftMeta.defaultUrl}
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+
+            <label className="form-field" htmlFor="ai-timeout-input">
               <span className="field-label">超时时间（毫秒）</span>
               <input
+                id="ai-timeout-input"
                 type="number"
                 className="input-control mono-num"
                 min={5000}
@@ -405,106 +570,108 @@ export function AiPanel({ request, onSaved }: Props) {
                 onChange={(e) => setSettings({ ...settings, timeoutMs: Number(e.target.value) })}
               />
             </label>
-          </div>
 
-          {quickModels.length > 0 && (
-            <div className="od-field" style={{ '--od-gap': '6px' } as React.CSSProperties}>
-              <span className="field-hint">
-                {settings.provider === 'gemini' ? '推荐 Gemini 模型：' : '推荐本机 Ollama 模型（`qwen3.6` 实测综合最佳）：'}
+            {isOllama && (
+              <div className="form-field ai-ollama-key-field">
+                <div className="ai-label-row">
+                  <label className="field-label" htmlFor="ai-ollama-key-input">
+                    API Key（可选）
+                  </label>
+                  {showClearButton && (
+                    <button
+                      type="button"
+                      className={`ai-inline-action-btn ${clearApiKey ? 'is-clearing' : ''}`}
+                      onClick={handleClearKeyToggle}
+                    >
+                      {clearApiKey ? '撤销清除' : '清除'}
+                    </button>
+                  )}
+                </div>
+                <input
+                  id="ai-ollama-key-input"
+                  type="password"
+                  className="input-control mono-num"
+                  autoComplete="new-password"
+                  disabled={clearApiKey}
+                  value={apiKey}
+                  onChange={(e) => {
+                    setApiKey(e.target.value);
+                    if (e.target.value.trim()) setClearApiKey(false);
+                  }}
+                  placeholder={keyAppliesToDraft && !clearApiKey ? '已保存密钥（留空保留）' : draftMeta.keyPlaceholder}
+                />
+              </div>
+            )}
+          </div>
+        </details>
+
+        {/* Inline Connection Test Feedback */}
+        {checkResult && (
+          <div className={`ai-test-feedback ${checkResult.ok ? 'is-ok' : 'is-error'}`} role="status" aria-live="polite">
+            <div className="ai-test-feedback-head">
+              <span className="ai-test-status-line">
+                <span className="ai-test-dot" aria-hidden="true" />
+                <span>
+                  {checkResult.message}
+                </span>
               </span>
-              <div className="model-chip-list" role="group" aria-label="推荐模型">
-                {quickModels.map((m) => (
+              <button type="button" className="ai-test-dismiss" onClick={() => setCheckResult(null)}>
+                收起
+              </button>
+            </div>
+            {checkResult.models.length > 0 && (
+              <div className="ai-quick-chips" role="group" aria-label="已发现模型">
+                {checkResult.models.slice(0, 16).map((m) => (
                   <button
                     key={m}
                     type="button"
-                    className={`model-chip ${settings.model === m ? 'is-active' : ''}`}
+                    className={`ai-quick-chip ${settings.model === m ? 'is-active' : ''}`}
                     onClick={() => setSettings({ ...settings, model: m })}
                   >
-                    {settings.provider === 'gemini' ? <Sparkles size={12} /> : <Bot size={12} />}
-                    <span>{m}</span>
+                    {m}
                   </button>
                 ))}
               </div>
-            </div>
-          )}
+            )}
+          </div>
+        )}
 
-          {checkResult && (
-            checkResult.ok ? (
-              <div className="model-discovery-box" role="status">
-                <div className="od-row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', '--od-gap': '8px' } as React.CSSProperties}>
-                  <strong style={{ fontSize: 'var(--text-xs)', color: 'var(--ok-ink)' }}>连接正常</strong>
-                  <span className="mono-num field-hint">
-                    {checkResult.models.length ? `发现 ${checkResult.models.length} 个模型` : checkResult.message}
-                  </span>
-                </div>
-                {checkResult.models.length > 0 && (
-                  <div className="model-chip-list" role="group" aria-label="已发现模型">
-                    {checkResult.models.slice(0, 16).map((m) => (
-                      <button
-                        key={m}
-                        type="button"
-                        className={`model-chip ${settings.model === m ? 'is-active' : ''}`}
-                        onClick={() => setSettings({ ...settings, model: m })}
-                      >
-                        <Bot size={12} />
-                        <span>{m}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="inline-note" role="status" style={{ margin: 0 }}>
-                <strong>连接失败：</strong>
-                {checkResult.message}
-              </div>
-            )
-          )}
-
-          <div
-            className="od-row"
-            style={{
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              '--od-gap': '10px',
-              paddingTop: '12px',
-              borderTop: '1px solid var(--line-subtle)'
-            } as React.CSSProperties}
-          >
-            <div className="od-cluster" style={{ '--od-gap': '8px' } as React.CSSProperties}>
-              <button type="submit" className="btn btn-primary btn-sm" disabled={!!busy}>
-                {busy === 'save' ? <LoaderCircle size={14} className="spin" /> : <Check size={14} />}
-                <span>{isDirty ? '保存并切换引擎' : '保存配置'}</span>
-              </button>
-              <button type="button" className="btn btn-secondary btn-sm" disabled={!!busy} onClick={() => void testConnection()}>
-                {busy === 'check' ? <LoaderCircle size={14} className="spin" /> : <Radio size={14} />}
-                <span>测试连接</span>
-              </button>
-            </div>
-            <button
-              type="button"
-              className="btn btn-ink btn-sm"
-              disabled={!!busy || !savedSettings.enabled}
-              onClick={() => void generateSelectedReviews()}
-            >
-              {busy === 'batch' ? <LoaderCircle size={14} className="spin" /> : <Sparkles size={14} />}
-              <span>用当前引擎补全乐评</span>
+        {/* Footer Action Bar */}
+        <div className="ai-card-footer">
+          <div className="ai-footer-primary-cluster">
+            <button type="submit" className="btn btn-primary btn-sm" disabled={!!busy}>
+              {busy === 'save' && <LoaderCircle size={14} className="spin" />}
+              <span>{switchingProvider ? '保存并切换' : '保存配置'}</span>
+            </button>
+            <button type="button" className="btn btn-secondary btn-sm" disabled={!!busy} onClick={() => void testConnection()}>
+              {busy === 'check' && <LoaderCircle size={14} className="spin" />}
+              <span>{busy === 'check' ? '测试中…' : '测试连接'}</span>
             </button>
           </div>
-        </form>
 
-        {error && (
-          <div className="banner error" role="alert" style={{ marginBottom: 0 }}>
-            <span>{error}</span>
-          </div>
-        )}
-        {notice && (
-          <div className="banner success" role="status" style={{ marginBottom: 0 }}>
-            <Check size={15} />
-            <span>{notice}</span>
-          </div>
-        )}
-      </div>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm ai-utility-btn"
+            disabled={!!busy || !savedSettings.enabled}
+            onClick={() => void generateSelectedReviews()}
+          >
+            {busy === 'batch' && <LoaderCircle size={14} className="spin" />}
+            <span>{busy === 'batch' ? '排队补全中…' : '补全入选专辑乐评'}</span>
+          </button>
+        </div>
+      </form>
+
+      {error && (
+        <div className="banner error" role="alert" style={{ marginTop: '14px', marginBottom: 0 }}>
+          <span>{error}</span>
+        </div>
+      )}
+      {notice && (
+        <div className="banner success" role="status" style={{ marginTop: '14px', marginBottom: 0 }}>
+          <Check size={15} />
+          <span>{notice}</span>
+        </div>
+      )}
     </section>
   );
 }

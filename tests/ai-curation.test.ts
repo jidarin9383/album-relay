@@ -87,6 +87,42 @@ function makeAlbum(
 }
 
 describe('Ollama / AI configuration, audience+critic reviews, taste curator, and extension detail backfill', () => {
+  it('reuses a saved key only for the same provider and normalized endpoint', async () => {
+    const checkConnection = vi.fn<LlmClient['checkConnection']>(async () => ({
+      ok: true, message: 'Fixture', models: [], checkedAt: new Date().toISOString()
+    }));
+    const ai: LlmClient = { checkConnection, completeJson: async () => { throw new Error('Unexpected generation'); } };
+    const dir = mkdtempSync(join(tmpdir(), 'relay-ai-key-scope-'));
+    const app = await createApp({ dataDir: dir, scheduler: false, ai });
+    const gemini = { ...DEFAULT_AI_SETTINGS, provider: 'gemini', baseUrl: GEMINI_DEFAULT_BASE_URL };
+    const fixtureKey = 'synthetic-fixture-key';
+    try {
+      const setup = await app.inject({ method: 'POST', url: '/api/setup', payload: { password: 'fixture-admin-password' } });
+      const headers = { cookie: setup.headers['set-cookie'] as string };
+      const save = (payload: object) => app.inject({ method: 'PUT', url: '/api/ai', headers, payload });
+      const probe = async (payload: object, expectedKey: string | null) => {
+        const response = await app.inject({ method: 'POST', url: '/api/ai/check', headers, payload });
+        expect(response.statusCode).toBe(200);
+        expect(checkConnection).toHaveBeenLastCalledWith(expect.any(Object), expectedKey);
+      };
+
+      expect((await save({ ...gemini, apiKey: fixtureKey })).json().settings.hasApiKey).toBe(true);
+      expect((await save({ ...gemini, model: 'another-model', baseUrl: `${gemini.baseUrl}/v1beta` })).json().settings.hasApiKey).toBe(true);
+      await probe({ baseUrl: `${gemini.baseUrl}/v1beta/` }, fixtureKey);
+      await probe({ baseUrl: 'https://alternate.example' }, null);
+      await probe({ provider: 'openai_compatible' }, null);
+      await probe({ clearApiKey: true }, null);
+      await probe({ baseUrl: 'https://alternate.example', apiKey: 'replacement-fixture-key' }, 'replacement-fixture-key');
+      expect((await save({ ...gemini, baseUrl: 'https://alternate.example' })).json().settings.hasApiKey).toBe(false);
+      await probe({}, null);
+      expect((await save({ ...gemini, apiKey: fixtureKey })).json().settings.hasApiKey).toBe(true);
+      expect((await save({ ...gemini, provider: 'openai_compatible' })).json().settings.hasApiKey).toBe(false);
+    } finally {
+      await app.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('discovers Ollama /api/tags models, strips <think> blocks, and masks API keys in /api/ai', async () => {
     const mockFetch = vi.fn(async (url: RequestInfo | URL) => {
       const s = String(url);
@@ -488,6 +524,7 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
             yield { name: 'models/gemini-2.5-flash' };
             yield { name: 'models/text-embedding-004' };
             yield { name: 'models/gemini-4-argon' };
+            yield { name: 'models/gemini-3.8-flash' };
             yield { name: 'models/gemini-4-hydrogen' };
             yield { name: 'models/gemini-3.5-flash-lite' };
           }
@@ -496,6 +533,9 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
       interactions: {
         create: async (params) => {
           createCalls.push(params as unknown as Record<string, unknown>);
+          if (!params.response_format) {
+            return { status: 'completed', output_text: 'OK' };
+          }
           if (forceBadSchemaOnce) {
             forceBadSchemaOnce = false;
             throw new Error('400 INVALID_ARGUMENT: thinking_level not supported on AIzaSecretKey12345');
@@ -552,7 +592,7 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
       });
       expect(JSON.stringify(saveRes.json())).not.toContain('AIzaSecretKey12345');
 
-      // Saved API key powers connection check and filters out embedding + legacy models while prioritizing Gemini 4
+      // Saved API key powers connection check (list + lightweight probe) and ranks recommended models first
       const checkRes = await app.inject({
         method: 'POST',
         url: '/api/ai/check',
@@ -561,7 +601,7 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
       });
       expect(checkRes.statusCode).toBe(200);
       expect(checkRes.json().ok).toBe(true);
-      expect(checkRes.json().models).toEqual(['gemini-4-hydrogen', 'gemini-4-argon', 'gemini-3.5-flash-lite']);
+      expect(checkRes.json().models).toEqual(['gemini-4-hydrogen', 'gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-4-argon']);
 
       // completeJson uses store: false + stripped JSON schema, and retries cleanly on 400
       const schema = z.object({
@@ -576,22 +616,94 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
         schema
       });
       expect(out.shortReview).toContain('极简鼓组');
-      expect(createCalls).toHaveLength(2);
-      expect(createCalls[0]).toMatchObject({
+      const generationCalls = createCalls.filter((c) => c.response_format);
+      expect(generationCalls).toHaveLength(2);
+      expect(generationCalls[0]).toMatchObject({
         model: 'gemini-4-hydrogen',
         store: false,
         system_instruction: 'You are a concise music critic.',
         generation_config: { thinking_level: 'low' }
       });
-      const rf0 = createCalls[0]!.response_format as { schema?: Record<string, unknown> };
+      const rf0 = generationCalls[0]!.response_format as { schema?: Record<string, unknown> };
       expect(rf0.schema).toBeDefined();
       expect(rf0.schema!.$schema).toBeUndefined();
       expect(rf0.schema!.additionalProperties).toBeUndefined();
-      expect(createCalls[1]!.generation_config).toBeUndefined();
+      expect(generationCalls[1]!.generation_config).toBeUndefined();
     } finally {
       await app.close();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    { status: 'incomplete', output_text: 'partial output' },
+    { status: 'completed', output_text: '' }
+  ])('rejects unsuccessful or empty Gemini probes ($status)', async (interaction) => {
+    const llm = new DefaultLlmClient(fetch, () => ({
+      models: { list: async () => ({ async *[Symbol.asyncIterator]() {
+        yield { name: 'models/gemini-fixture' };
+      } }) },
+      interactions: { create: async () => interaction }
+    }));
+    const result = await llm.checkConnection({
+      ...DEFAULT_AI_SETTINGS, provider: 'gemini', baseUrl: GEMINI_DEFAULT_BASE_URL,
+      model: 'gemini-fixture', hasApiKey: true
+    }, 'synthetic-fixture-key');
+    expect(result.ok).toBe(false);
+    expect(result.models).toEqual(['gemini-fixture']);
+  });
+
+  it('surfaces clear Chinese HTTP 402 billing/model diagnostics without httpMeta noise and preserves discovered models during check', async () => {
+    const fake402Factory: GeminiClientFactory = () => ({
+      models: {
+        list: async () => ({
+          async *[Symbol.asyncIterator]() {
+            yield { name: 'models/gemini-4-hydrogen' };
+            yield { name: 'models/gemini-3.8-flash' };
+          }
+        })
+      },
+      interactions: {
+        create: async () => {
+          const err = new Error('402 API error occurred: {"httpMeta":{"response":{},"request":{}}}') as Error & {
+            statusCode: number;
+            body: string;
+          };
+          err.statusCode = 402;
+          err.body = JSON.stringify({ error: { message: 'Prepay credit balance depleted for AIzaSecretKey999' } });
+          throw err;
+        }
+      }
+    });
+
+    const llm = new DefaultLlmClient(fetch, fake402Factory);
+    const settings: AiSettings = {
+      enabled: true,
+      provider: 'gemini',
+      baseUrl: GEMINI_DEFAULT_BASE_URL,
+      model: 'gemini-4-hydrogen',
+      autoReviewSelected: false,
+      timeoutMs: 45_000
+    };
+
+    const check = await llm.checkConnection(settings, 'AIzaSecretKey999');
+    expect(check.ok).toBe(false);
+    expect(check.message).toContain('HTTP 402');
+    expect(check.message).toContain('Prepay');
+    expect(check.message).toContain('gemini-3.8-flash');
+    expect(check.message).not.toContain('httpMeta');
+    expect(check.message).not.toContain('AIzaSecretKey999');
+    expect(check.models).toEqual(['gemini-4-hydrogen', 'gemini-3.8-flash']);
+
+    await expect(
+      llm.completeJson({
+        settings,
+        apiKey: 'AIzaSecretKey999',
+        system: 'sys',
+        user: 'usr',
+        schema: z.object({ ok: z.boolean() })
+      })
+    ).rejects.toThrow(/HTTP 402.*Prepay.*\[REDACTED\]/);
   });
 
   it('sends reasoning_effort=none for Ollama and falls back on 400 when unsupported', async () => {

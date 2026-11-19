@@ -376,33 +376,47 @@ function App() {
             </span>
           </button>
 
-          <button
-            type="button"
-            className="netease-live-pill"
-            title="前往设置管理网易云连接"
-            onClick={() => navigate('settings', 'connect')}
-          >
-            <span className="od-row" style={{ '--od-gap': '8px' } as React.CSSProperties}>
+          <div className="rail-status-stack" aria-label="系统连接状态">
+            <button
+              type="button"
+              className={`rail-status-pill ${connection?.loggedIn ? '' : 'is-muted-pill'}`}
+              title={connection?.loggedIn ? '网易云音乐已连接 · 点击管理同步设置' : '网易云音乐未连接 · 点击前往「连接与同步」'}
+              onClick={() => navigate('settings', 'connect')}
+            >
               <span className={`status-dot ${connection?.loggedIn ? '' : 'is-offline'}`} aria-hidden="true" />
-              <span className="netease-pill-text">{connection?.loggedIn ? '网易云已连接' : '网易云未连接'}</span>
-            </span>
-          </button>
-
-          <button
-            type="button"
-            className="netease-live-pill"
-            title={aiSettings?.enabled ? `当前 AI 引擎：${aiSettings.provider} · ${aiSettings.model}` : '点击前往配置 AI 引擎'}
-            onClick={() => navigate('settings', 'advanced')}
-          >
-            <span className="od-row" style={{ '--od-gap': '8px' } as React.CSSProperties}>
-              <span className={`status-dot ${aiSettings?.enabled ? '' : 'is-offline'}`} aria-hidden="true" />
-              <span className="netease-pill-text">
-                {aiSettings?.enabled
-                  ? `${aiSettings.provider === 'gemini' ? 'Gemini' : aiSettings.provider === 'ollama' ? 'Ollama' : 'OpenAI'} · ${aiSettings.model}`
-                  : 'AI 未启用'}
+              <span className="rail-status-copy">
+                <span className="rail-status-primary">{connection?.loggedIn ? '网易云已连接' : '网易云未连接'}</span>
               </span>
-            </span>
-          </button>
+            </button>
+
+            <button
+              type="button"
+              className={`rail-status-pill ${aiSettings?.enabled ? 'is-current-surface' : 'is-muted-pill'}`}
+              title={
+                aiSettings?.enabled
+                  ? `AI 引擎运行中：${aiSettings.provider === 'gemini' ? 'Google Gemini' : aiSettings.provider === 'ollama' ? 'Ollama 本地' : 'OpenAI 兼容'} · ${aiSettings.model}`
+                  : 'AI 策展与乐评当前未启用 · 点击前往配置'
+              }
+              onClick={() => navigate('settings', 'advanced')}
+            >
+              <span className={`status-dot ${aiSettings?.enabled ? '' : 'is-idle'}`} aria-hidden="true" />
+              <span className="rail-status-copy">
+                {aiSettings?.enabled ? (
+                  <>
+                    <span className="rail-status-primary">
+                      {aiSettings.provider === 'gemini' ? 'Gemini' : aiSettings.provider === 'ollama' ? 'Ollama' : 'OpenAI'}
+                    </span>
+                    <span className="rail-status-sep" aria-hidden="true">
+                      ·
+                    </span>
+                    <span className="rail-status-model">{aiSettings.model}</span>
+                  </>
+                ) : (
+                  <span className="rail-status-primary">AI 乐评未启用</span>
+                )}
+              </span>
+            </button>
+          </div>
 
           <button
             type="button"

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowDownToLine, Check, Headphones, LoaderCircle, Plus, Radio, Sparkles, Upload } from 'lucide-react';
+import { ArrowDownToLine, Check, ChevronRight, Headphones, LoaderCircle, Plus, Radio, Sparkles, Upload } from 'lucide-react';
 import type { ImportBatchSummary, ImportSource, PersonalOverview } from '../shared/personal';
 import type { AiSettings, ConnectionStatus, Run, RunMode, Settings, SourceName } from '../shared/types';
 import { AiPanel } from './AiPanel';
@@ -890,68 +890,78 @@ export function SettingsPage({
 
       {/* 4. AI & ADVANCED TROUBLESHOOTING */}
       {tab === 'advanced' && (
-        <div className="od-stack" style={{ '--od-gap': '24px' } as React.CSSProperties}>
+        <div className="od-stack" style={{ '--od-gap': '16px' } as React.CSSProperties}>
           <AiPanel request={request} onSaved={onAiSaved} />
 
-          <section className="rules-section">
-            <details>
-              <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 'var(--text-body)' }}>
-                手动来源入口与后台记录
-              </summary>
-              <div className="od-stack" style={{ '--od-gap': '20px', marginTop: 'var(--sp-5)' } as React.CSSProperties}>
-                <CapturePanel request={request} onCaptured={onDataUpdated} />
+          <details className="manual-records-disclosure">
+            <summary className="manual-records-summary">
+              <span className="manual-records-title">
+                <ChevronRight size={15} className="ai-disclosure-chevron" aria-hidden="true" />
+                <span>手动来源入口与后台记录</span>
+              </span>
+              <span className="manual-records-meta">
+                AOTY · RYM · P4K · {runs.length ? `${runs.length} 条任务记录` : '暂无任务记录'}
+              </span>
+            </summary>
 
-                <div style={{ borderTop: '1px solid var(--line-subtle)', paddingTop: 'var(--sp-4)' }}>
-                  <div className="od-row" style={{ justifyContent: 'space-between', marginBottom: 'var(--sp-3)' }}>
-                    <strong style={{ fontSize: 'var(--text-sm)' }}>最近自动同步与任务记录</strong>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      disabled={localBusy === 'trigger-auto'}
-                      onClick={() =>
-                        void runLocal('trigger-auto', async () => {
-                          await request('/automation/run', {});
-                          notify('已触发后台流水线更新，稍后可查看结果。');
-                        })
-                      }
-                    >
-                      <Sparkles size={12} />
-                      <span>立即检查并更新全部结果</span>
-                    </button>
-                  </div>
+            <div className="manual-records-body">
+              <CapturePanel request={request} onCaptured={onDataUpdated} />
 
-                  {runs.length > 0 ? (
-                    <div className="od-stack" style={{ '--od-gap': '8px' } as React.CSSProperties}>
-                      {runs.slice(0, 8).map((r) => (
-                        <details
-                          key={r.id}
-                          style={{ background: 'var(--bg-canvas)', border: '1px solid var(--line-subtle)', borderRadius: 'var(--radius-sm)', padding: '10px 14px' }}
-                        >
-                          <summary className="od-row" style={{ justifyContent: 'space-between', cursor: 'pointer', fontSize: 'var(--text-xs)' }}>
-                            <span>
-                              <strong>{runModeNames[r.mode]}</strong> · {runStateNames[r.status] ?? r.status}
-                              {r.message ? ` — ${r.message}` : ''}
-                            </span>
-                            <span className="mono-num field-hint">{fmtTime(r.startedAt)}</span>
-                          </summary>
-                          <div className="log-console" style={{ marginTop: '8px', maxHeight: '180px' }}>
-                            {r.logs.map((log, i) => (
-                              <div className="log-line" key={i}>
-                                <span className="log-ts">{new Date(log.at).toLocaleTimeString('zh-CN')}</span>
-                                <span>{log.message}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </details>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="field-hint">暂无后台同步记录。</p>
-                  )}
+              <div style={{ borderTop: '1px solid var(--line-subtle)', paddingTop: 'var(--sp-4)' }}>
+                <div className="od-row" style={{ justifyContent: 'space-between', marginBottom: 'var(--sp-3)', flexWrap: 'wrap' }}>
+                  <strong style={{ fontSize: 'var(--text-sm)' }}>最近自动同步与任务记录</strong>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={localBusy === 'trigger-auto'}
+                    onClick={() =>
+                      void runLocal('trigger-auto', async () => {
+                        await request('/automation/run', {});
+                        notify('已触发后台流水线更新，稍后可查看结果。');
+                      })
+                    }
+                  >
+                    <Sparkles size={12} />
+                    <span>立即检查并更新全部结果</span>
+                  </button>
                 </div>
+
+                {runs.length > 0 ? (
+                  <div className="od-stack" style={{ '--od-gap': '8px' } as React.CSSProperties}>
+                    {runs.slice(0, 8).map((r) => (
+                      <details
+                        key={r.id}
+                        style={{
+                          background: 'var(--bg-surface)',
+                          border: '1px solid var(--line-subtle)',
+                          borderRadius: 'var(--radius-sm)',
+                          padding: '10px 14px'
+                        }}
+                      >
+                        <summary className="od-row" style={{ justifyContent: 'space-between', cursor: 'pointer', fontSize: 'var(--text-xs)' }}>
+                          <span>
+                            <strong>{runModeNames[r.mode]}</strong> · {runStateNames[r.status] ?? r.status}
+                            {r.message ? ` — ${r.message}` : ''}
+                          </span>
+                          <span className="mono-num field-hint">{fmtTime(r.startedAt)}</span>
+                        </summary>
+                        <div className="log-console" style={{ marginTop: '8px', maxHeight: '180px' }}>
+                          {r.logs.map((log, i) => (
+                            <div className="log-line" key={i}>
+                              <span className="log-ts">{new Date(log.at).toLocaleTimeString('zh-CN')}</span>
+                              <span>{log.message}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="field-hint">暂无后台同步记录。</p>
+                )}
               </div>
-            </details>
-          </section>
+            </div>
+          </details>
         </div>
       )}
     </>

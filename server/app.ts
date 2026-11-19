@@ -21,7 +21,8 @@ import { SERVER_FETCH_SOURCES, EXTENSION_ONLY_MESSAGE } from './sources/index.js
 import { ExtensionService, EXTENSION_PREFIX, MAX_REFRESH_TARGETS, capturableSource, resolveTarget } from './extension.js';
 import { isDirectlyLoadableCover, resolvePublicCover } from './covers.js';
 import { buildListenLinks, readListenLinksCacheMap, resolveAlbumListenLinks } from './links.js';
-import { DefaultLlmClient, getAiApiKey, getAiSettings, normalizeAiBaseUrl, saveAiSettings, type LlmClient } from './ai/client.js';
+import { DefaultLlmClient, getAiApiKey, getAiSettings, saveAiSettings, type LlmClient } from './ai/client.js';
+import { isSameAiEndpoint, normalizeAiBaseUrl } from '../shared/ai-endpoint.js';
 import { buildMonthlyAiDraft, readLatestMonthlyDraft } from './ai/playlist.js';
 import { generateAlbumAiReview, readAiReviewsMap, ReviewQueue } from './ai/reviews.js';
 import { generateRecommendationsSmart, readLatestPersona } from './ai/curator.js';
@@ -357,7 +358,8 @@ export async function createApp(options:{dataDir:string;scheduler?:boolean;sourc
    provider:z.enum(['ollama','gemini','openai_compatible']).optional(),
    baseUrl:z.string().trim().min(1).max(500).optional(),
    model:z.string().trim().min(1).max(120).optional(),
-   apiKey:z.string().max(1024).optional()
+   apiKey:z.string().max(1024).optional(),
+   clearApiKey:z.boolean().optional()
   });
   const parsed=draftSchema.safeParse(req.body??{});
   if(!parsed.success)return reply.code(400).send({error:'模型连接测试参数无效'});
@@ -366,8 +368,10 @@ export async function createApp(options:{dataDir:string;scheduler?:boolean;sourc
    const provider=parsed.data.provider??saved.provider;
    const baseUrl=parsed.data.baseUrl?normalizeAiBaseUrl(parsed.data.baseUrl,provider):saved.baseUrl;
    const model=parsed.data.model??saved.model;
-   const apiKey=parsed.data.apiKey?.trim()?parsed.data.apiKey.trim():getAiApiKey(store);
-   return await aiClient.checkConnection({...saved,provider,baseUrl,model},apiKey);
+   const draft={...saved,provider,baseUrl,model};
+   const savedKey=isSameAiEndpoint(saved,draft)?getAiApiKey(store):null;
+   const apiKey=parsed.data.clearApiKey?null:parsed.data.apiKey?.trim()||savedKey;
+   return await aiClient.checkConnection({...draft,hasApiKey:Boolean(apiKey)},apiKey);
   }catch(e){
    return reply.code(400).send({error:e instanceof Error?e.message:'模型地址无效'});
   }
