@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronUp, EyeOff, RotateCcw } from 'lucide-react';
+import { sanitizeReviewSnippets } from '../shared/review-evidence';
 import type { Album, ListeningStatus } from '../shared/types';
 import { AlbumAiReviewBlock, ListenPlatformBar, SourceReviewLinks } from './AlbumActions';
 
@@ -60,7 +61,9 @@ export function AlbumCard({
   const [expanded, setExpanded] = useState(false);
   const currentStatus = album.listeningStatus ?? 'unheard';
   const isHidden = album.excluded || currentStatus === 'disliked' || currentStatus === 'skipped';
-  const snippets = album.sources.flatMap((s) => (s.reviewSnippets ?? []).map((r) => ({ source: s.source, ...r })));
+  const snippets = album.sources.flatMap((s) =>
+    sanitizeReviewSnippets(s.reviewSnippets, s.source).map((r) => ({ source: s.source, ...r }))
+  );
 
   return (
     <article className={`clean-album-card ${isHidden ? 'is-muted-card' : ''}`}>

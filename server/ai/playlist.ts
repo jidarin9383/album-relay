@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeLongReview } from '../../shared/review-evidence.js';
 import type { AiProviderKind, Album, MonthlyAiDraft, MonthlyAiDraftItem, Playlist, Settings, SourceName } from '../../shared/types.js';
 import type { TastePersona } from '../../shared/personal.js';
 import { decide, isObservationFresh, todayInTimezone } from '../policy.js';
@@ -286,7 +287,8 @@ export async function generateAiPlaylistDescription(
       user: JSON.stringify({ month, playlistName: playlistNameText, albumCount: albums.length, albums: digest }),
       schema: playlistIntroSchema
     });
-    const combined = res.description.trim() + (res.description.trim().length + footer.length <= limit ? footer : '');
+    const normalizedDescription = normalizeLongReview(res.description);
+    const combined = normalizedDescription + (normalizedDescription.length + footer.length <= limit ? footer : '');
     return trimToBoundary(combined, limit);
   } catch {
     return generateDescription(albums, { playlist: { namePattern: playlistNameText, descriptionMaxChars: limit } });

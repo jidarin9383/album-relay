@@ -24,7 +24,7 @@ import { buildListenLinks, readListenLinksCacheMap, resolveAlbumListenLinks } fr
 import { DefaultLlmClient, getAiApiKey, getAiSettings, saveAiSettings, type LlmClient } from './ai/client.js';
 import { isSameAiEndpoint, normalizeAiBaseUrl } from '../shared/ai-endpoint.js';
 import { buildMonthlyAiDraft, readLatestMonthlyDraft } from './ai/playlist.js';
-import { generateAlbumAiReview, purgeSpeculativeAiReviews, readAiReviewsMap, ReviewQueue } from './ai/reviews.js';
+import { generateAlbumAiReview, purgeSpeculativeAiReviews, readAiReviewsMap, ReviewQueue, sanitizeStoredReviewsAndSnippets } from './ai/reviews.js';
 import { generateRecommendationsSmart, readLatestPersona } from './ai/curator.js';
 import { importPersonalData, listImportBatches } from './personal/imports.js';
 import { addManualFavorite, recordAlbumFeedback } from './personal/feedback.js';
@@ -110,6 +110,12 @@ export async function createApp(options:{dataDir:string;scheduler?:boolean;sourc
   store.transaction(()=>{
    purgeSpeculativeAiReviews(store);
    store.setValue('reviews-strict-evidence-v1','true');
+  });
+ }
+ if(store.getValue('reviews-format-and-snippets-v1')!=='true'){
+  store.transaction(()=>{
+   sanitizeStoredReviewsAndSnippets(store);
+   store.setValue('reviews-format-and-snippets-v1','true');
   });
  }
  const automation=options.scheduler===false?null:new AutomationCoordinator({store,aiClient,reviewQueue,runner,netease});

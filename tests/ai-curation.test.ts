@@ -11,6 +11,7 @@ import { Runner } from '../server/runner.js';
 import { importPersonalData } from '../server/personal/imports.js';
 import { albumId, decide, defaultSettings } from '../server/policy.js';
 import { Store } from '../server/store.js';
+import { hasAlbumReviewEvidence, normalizeLongReview, parseLongReviewBlocks } from '../shared/review-evidence.js';
 import type { AiConnectionCheck, AiSettings, Album } from '../shared/types.js';
 
 function makeAlbum(
@@ -918,6 +919,160 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
       await netease.close();
       store.close();
       rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+
+  it('normalizes literal \\n\\n, single newlines, inline headings, and markdown wrappers in AI longReview', () => {
+    const screenshotPayload =
+      '【声音质地】以男声为主导，旋律流畅且兼具明亮、振奋与苦乐参半的质感。 \\n\\n 【风格坐标】横跨新迷幻、迷幻流行与声音拼贴等脉络。 \\n\\n 【口碑拆解】在海量乐迷投票中收获稳固的高分共识。 \\n\\n 【适听与劝退】偏爱精致旋律化迷幻流行的听众容易被打动。';
+    expect(parseLongReviewBlocks(screenshotPayload)).toEqual([
+      { label: '声音质地', body: '以男声为主导，旋律流畅且兼具明亮、振奋与苦乐参半的质感。' },
+      { label: '风格坐标', body: '横跨新迷幻、迷幻流行与声音拼贴等脉络。' },
+      { label: '口碑拆解', body: '在海量乐迷投票中收获稳固的高分共识。' },
+      { label: '适听与劝退', body: '偏爱精致旋律化迷幻流行的听众容易被打动。' }
+    ]);
+
+    const mixedDecorated =
+      '### **【声音质地】**：\n音色清冷。\n**【风格坐标】**：Dream Pop 与 Shoegaze 【口碑拆解】媒体与乐迷高度一致。【适听与劝退】\n';
+    expect(normalizeLongReview(mixedDecorated)).toBe(
+      '【声音质地】音色清冷。\n\n【风格坐标】Dream Pop 与 Shoegaze\n\n【口碑拆解】媒体与乐迷高度一致。\n\n【适听与劝退】'
+    );
+    expect(parseLongReviewBlocks(mixedDecorated)).toEqual([
+      { label: '声音质地', body: '音色清冷。' },
+      { label: '风格坐标', body: 'Dream Pop 与 Shoegaze' },
+      { label: '口碑拆解', body: '媒体与乐迷高度一致。' }
+    ]);
+
+    const plainLiteral = '第一段概述声景纹理。\\n\\n第二段概括口碑共识。';
+    expect(parseLongReviewBlocks(plainLiteral)).toEqual([
+      { label: null, body: '第一段概述声景纹理。' },
+      { label: null, body: '第二段概括口碑共识。' }
+    ]);
+  });
+
+  it('normalizes literal \\n\\n during generation and cleans stored Not published snippets, Published suffixes, and malformed reviews on startup', async () => {
+    const genDir = mkdtempSync(join(tmpdir(), 'relay-gen-normalize-'));
+    const genAlbum = makeAlbum('Test Band', 'Crystal Dawn', ['Psychedelic Pop'], {
+      detailCaptured: true,
+      descriptors: ['melodic', 'lush']
+    });
+    const seedGen = new Store(genDir);
+    seedGen.saveAlbums([genAlbum]);
+    seedGen.close();
+
+    let capturedSystem = '';
+    const literalMockAi: LlmClient = {
+      async checkConnection() {
+        return { ok: true, message: 'ok', models: ['gemini-4-hydrogen'], checkedAt: new Date().toISOString() };
+      },
+      async completeJson<T>(req: LlmJsonRequest<T>): Promise<T> {
+        capturedSystem = req.system;
+        return req.schema.parse({
+          shortReview: '明亮而细腻的迷幻流行声景，\\n旋律流畅。',
+          longReview:
+            '【声音质地】男声旋律流畅且饱满。 \\n\\n 【风格坐标】延续新迷幻与室内流行脉络。',
+          audienceSummary: '核心乐迷高分认可，\\n反馈积极。',
+          criticSummary: '暂无媒体评分与乐评摘录'
+        });
+      }
+    };
+
+    const genApp = await createApp({ dataDir: genDir, scheduler: false, ai: literalMockAi });
+    try {
+      const setup = await genApp.inject({ method: 'POST', url: '/api/setup', payload: { password: 'normalize-test-password' } });
+      const cookie = setup.headers['set-cookie'] as string;
+      await genApp.inject({
+        method: 'PUT',
+        url: '/api/ai',
+        headers: { cookie },
+        payload: { enabled: true, provider: 'ollama', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen3.6:35b-a3b-mxfp8' }
+      });
+
+      const genRes = await genApp.inject({ method: 'POST', url: `/api/albums/${genAlbum.id}/review`, headers: { cookie }, payload: {} });
+      expect(genRes.statusCode).toBe(200);
+      expect(capturedSystem).not.toContain('\\n\\n');
+      const review = genRes.json().review;
+      expect(review.shortReview).toBe('明亮而细腻的迷幻流行声景， 旋律流畅。');
+      expect(review.audienceSummary).toBe('核心乐迷高分认可， 反馈积极。');
+      expect(review.longReview).toBe('【声音质地】男声旋律流畅且饱满。\n\n【风格坐标】延续新迷幻与室内流行脉络。');
+      expect(review.longReview).not.toContain('\\n');
+    } finally {
+      await genApp.close();
+      rmSync(genDir, { recursive: true, force: true });
+    }
+
+    // Startup migration cleanup for legacy stored snippets & literal \n\n reviews
+    const dir = mkdtempSync(join(tmpdir(), 'relay-startup-cleanup-'));
+    const onlyUnpublishedAlb = makeAlbum('Ghost Draft', 'Empty Note', ['Ambient'], { detailCaptured: true });
+    onlyUnpublishedAlb.sources[0]!.reviewSnippets = [{ kind: 'user', author: 'example_user', text: 'Not published' }];
+
+    const mixedAlbum = makeAlbum('The Olivia Tremor Control', 'The Same Place', ['Neo-Psychedelia'], { detailCaptured: true });
+    mixedAlbum.sources[0]!.reviewSnippets = [
+      { kind: 'user', author: 'example_user', text: 'Not published' },
+      { kind: 'user', author: 'Turtlechris08', text: '초반 후반은 aoty급으로 좋은데 중반이 ㄹㅈㄷ로 루즈함Published' }
+    ];
+
+    const seed = new Store(dir);
+    seed.saveAlbums([onlyUnpublishedAlb, mixedAlbum]);
+    const insertReview = seed.database.prepare(
+      `INSERT INTO album_reviews_ai(
+        album_id, evidence_hash, evidence_level, short_review, long_review,
+        audience_summary, critic_summary, model, generated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    );
+    insertReview.run(
+      onlyUnpublishedAlb.id,
+      'hash-1',
+      'full',
+      '凭无效草稿生成的短评',
+      '【声音质地】应随无效证据一并清除的长评内容。',
+      null,
+      null,
+      'gemini-4-hydrogen',
+      new Date().toISOString()
+    );
+    insertReview.run(
+      mixedAlbum.id,
+      'hash-2',
+      'full',
+      '精致珍贵的遗作迷幻流行，\\n首尾惊艳而中段略显拖沓。',
+      '【声音质地】以男声为主导，旋律流畅。 \\n\\n 【风格坐标】横跨新迷幻与室内流行。 \\n\\n 【口碑拆解】高分共识。 \\n\\n 【适听与劝退】偏爱精致迷幻流行的听众易被打动。',
+      '乐迷高分认可。\\n部分听众认为中段拖沓。',
+      '暂无媒体评分与乐评摘录',
+      'gemini-4-hydrogen',
+      new Date().toISOString()
+    );
+    seed.close();
+
+    const app = await createApp({ dataDir: dir, scheduler: false });
+    try {
+      const setup = await app.inject({ method: 'POST', url: '/api/setup', payload: { password: 'cleanup-test-password' } });
+      const cookie = setup.headers['set-cookie'] as string;
+      const albumsRes = await app.inject({ url: '/api/albums', headers: { cookie } });
+      expect(albumsRes.statusCode).toBe(200);
+      const albums = albumsRes.json() as Album[];
+
+      const cleanedGhost = albums.find((a) => a.id === onlyUnpublishedAlb.id)!;
+      expect(cleanedGhost.sources[0]!.reviewSnippets).toBeUndefined();
+      expect(hasAlbumReviewEvidence(cleanedGhost)).toBe(false);
+      expect(cleanedGhost.aiReview).toBeNull();
+
+      const cleanedMixed = albums.find((a) => a.id === mixedAlbum.id)!;
+      expect(cleanedMixed.sources[0]!.reviewSnippets).toEqual([
+        {
+          kind: 'user',
+          author: 'Turtlechris08',
+          text: '초반 후반은 aoty급으로 좋은데 중반이 ㄹㅈㄷ로 루즈함'
+        }
+      ]);
+      expect(cleanedMixed.aiReview).not.toBeNull();
+      expect(cleanedMixed.aiReview!.shortReview).toBe('精致珍贵的遗作迷幻流行， 首尾惊艳而中段略显拖沓。');
+      expect(cleanedMixed.aiReview!.audienceSummary).toBe('乐迷高分认可。 部分听众认为中段拖沓。');
+      expect(cleanedMixed.aiReview!.longReview).not.toContain('\\n');
+      expect(parseLongReviewBlocks(cleanedMixed.aiReview!.longReview)).toHaveLength(4);
+    } finally {
+      await app.close();
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

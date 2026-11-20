@@ -2576,6 +2576,7 @@ details[open] > summary .ai-disclosure-chevron {
   font-size: var(--text-sm);
   line-height: 1.74;
   color: var(--ink-primary);
+  white-space: pre-line;
 }
 
 .ai-dossier-list {
@@ -2607,6 +2608,7 @@ details[open] > summary .ai-disclosure-chevron {
   font-size: var(--text-sm);
   line-height: 1.68;
   color: var(--ink-secondary);
+  white-space: pre-line;
 }
 
 /* Collapsible Scraped Quotes (<details>) in Library Drawer */

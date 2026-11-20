@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { ExternalLink, LoaderCircle, MessageSquareQuote, Sparkles } from 'lucide-react';
-import { hasAlbumReviewEvidence } from '../shared/review-evidence';
+import { hasAlbumReviewEvidence, normalizeAiInlineText, parseLongReviewBlocks } from '../shared/review-evidence';
 import type { Album, AlbumAiReview, ListenLinks, PlatformLink, SourceName } from '../shared/types';
 
 const SOURCE_ORIGINS: Record<SourceName, string> = {
@@ -240,19 +240,6 @@ export function ListenPlatformBar({
   );
 }
 
-function parseLongReviewBlocks(longReview: string): { label: string | null; body: string }[] {
-  return longReview
-    .split(/\n{2,}/)
-    .map((chunk) => chunk.trim())
-    .filter(Boolean)
-    .map((chunk) => {
-      const m = /^【([^】]{1,12})】\s*([\s\S]*)$/.exec(chunk);
-      if (!m) return { label: null, body: chunk };
-      const body = m[2]!.trim();
-      return body ? { label: m[1]!.trim(), body } : { label: null, body: chunk };
-    });
-}
-
 export function AlbumAiReviewBlock({
   album,
   aiEnabled = false,
@@ -272,10 +259,13 @@ export function AlbumAiReviewBlock({
   const [error, setError] = useState('');
   const review = album.aiReview?.evidenceLevel === 'full' ? album.aiReview : null;
   const hasEvidence = hasAlbumReviewEvidence(album);
+  const shortText = review?.shortReview ? normalizeAiInlineText(review.shortReview) : '';
+  const audienceSummary = review?.audienceSummary ? normalizeAiInlineText(review.audienceSummary) : '';
+  const criticSummary = review?.criticSummary ? normalizeAiInlineText(review.criticSummary) : '';
 
   if (mode === 'short') {
-    if (!review?.shortReview) return null;
-    return <p className={`clean-ai-quote ${compact ? 'od-clamp-2' : ''}`}>{review.shortReview}</p>;
+    if (!shortText) return null;
+    return <p className={`clean-ai-quote ${compact ? 'od-clamp-2' : ''}`}>{shortText}</p>;
   }
 
   const generate = (force: boolean) => {
@@ -337,25 +327,25 @@ export function AlbumAiReviewBlock({
         </p>
       ) : (
         <>
-          <div className="ai-thesis-box">{review.shortReview}</div>
-          {(review.audienceSummary || review.criticSummary) && (
+          <div className="ai-thesis-box">{shortText}</div>
+          {(audienceSummary || criticSummary) && (
             <div className="dual-perspective-grid">
-              {review.audienceSummary && (
+              {audienceSummary && (
                 <div className="perspective-card">
                   <div className="perspective-kicker">
                     <span>大众风评</span>
                     <span className="mono-num field-hint">RYM / AOTY</span>
                   </div>
-                  <p className="perspective-body">{review.audienceSummary}</p>
+                  <p className="perspective-body">{audienceSummary}</p>
                 </div>
               )}
-              {review.criticSummary && (
+              {criticSummary && (
                 <div className="perspective-card">
                   <div className="perspective-kicker">
                     <span>媒体风评</span>
                     <span className="mono-num field-hint">Pitchfork / Press</span>
                   </div>
-                  <p className="perspective-body">{review.criticSummary}</p>
+                  <p className="perspective-body">{criticSummary}</p>
                 </div>
               )}
             </div>

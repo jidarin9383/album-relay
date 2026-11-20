@@ -1,4 +1,5 @@
 import { load } from 'cheerio';
+import { sanitizeReviewSnippet } from '../../shared/review-evidence.js';
 import { albumId } from '../policy.js';
 import type { Album, CapturedStreamingLinks, ReviewSnippet, SourceName } from '../../shared/types.js';
 export const origins: Record<SourceName,string>={aoty:'https://www.albumoftheyear.org',rym:'https://rateyourmusic.com',pitchfork:'https://pitchfork.com'};
@@ -140,7 +141,8 @@ export function parseAoty(html:string,url:string):Album|null{
    const publication=cleanSnippet(row.find('.albumReviewPublication, .publication').first().text(),80);
    const author=cleanSnippet(row.find('.albumReviewAuthor, .author').first().text(),80);
    const rating=number(row.find('.albumReviewRating').first().text().trim(),100);
-   snippets.push({kind:'critic',...(publication?{publication}:{}),...(author?{author}:{}),...(rating!==null?{score:rating}:{}),text});
+   const sanitized=sanitizeReviewSnippet({kind:'critic',...(publication?{publication}:{}),...(author?{author}:{}),...(rating!==null?{score:rating}:{}),text},'aoty');
+   if(sanitized)snippets.push(sanitized);
   });
   $('#user-reviews .albumReviewRow, .userReviews .albumReviewRow, #popularUserReviews .albumReviewRow, .userReviewRow').each((_,el)=>{
    if(snippets.filter(s=>s.kind==='user').length>=4)return;
@@ -149,7 +151,8 @@ export function parseAoty(html:string,url:string):Album|null{
    if(!text)return;
    const author=cleanSnippet(row.find('.albumReviewAuthor, .userReviewName, a[href*="/user/"]').first().text(),80);
    const rating=number(row.find('.albumReviewRating, .rating').first().text().trim(),100);
-   snippets.push({kind:'user',...(author?{author}:{}),...(rating!==null?{score:rating}:{}),text});
+   const sanitized=sanitizeReviewSnippet({kind:'user',...(author?{author}:{}),...(rating!==null?{score:rating}:{}),text},'aoty');
+   if(sanitized)snippets.push(sanitized);
   });
   if(snippets.length)obs.reviewSnippets=snippets;
 
@@ -233,16 +236,44 @@ export function parseRym(html:string,url:string):Album|null{
   if(descriptors.length){obs.descriptors=descriptors;a.descriptors=descriptors;}
 
   const snippets:ReviewSnippet[]=[];
-  $('.review_body, .reviews_shell .review').each((_,el)=>{
+  const seenReviewNodes=new Set<unknown>();
+  const seenSnippetKeys=new Set<string>();
+  $('.review, .review_body').each((_,el)=>{
    if(snippets.length>=4)return;
    const node=$(el);
+   const reviewEl=node.hasClass('review')?node:node.closest('.review');
    const bodyEl=node.hasClass('review_body')?node:node.find('.review_body').first();
-   const text=cleanSnippet((bodyEl.length?bodyEl:node).text());
-   if(text.length<12)return;
-   const author=cleanSnippet(node.closest('.review').find('.review_user, a.user').first().text(),80);
-   const ratingText=node.closest('.review').find('.review_rating, [itemprop="ratingValue"]').first().text().trim();
+   const targetEl=bodyEl.length?bodyEl:reviewEl.length?reviewEl:node;
+   const keyNode=reviewEl.length?reviewEl[0]:targetEl[0];
+   if(!keyNode||seenReviewNodes.has(keyNode))return;
+   seenReviewNodes.add(keyNode);
+
+   const statusScope=reviewEl.length?reviewEl:targetEl;
+   const publishStatusText=statusScope.find('.review_publish_status').text().replace(/\s+/g,' ').trim();
+   if(/\bnot\s+published\b|\bunpublished\b/i.test(publishStatusText))return;
+   if(statusScope.is('.not_published, .unpublished')||statusScope.find('.not_published, .unpublished').length>0)return;
+   const isOwnReviewBox=statusScope.closest('#my_review, #saved_review, .saved_review').length>0||targetEl.hasClass('my_review')||reviewEl.hasClass('my_review');
+   if(isOwnReviewBox&&!/^published\b/i.test(publishStatusText))return;
+
+   const cleanBody=targetEl.clone();
+   cleanBody.find('.review_publish_status, .album_shortcut, input, button, script, style, .review_header, .review_user, .review_date, .review_rating, .review_actions').remove();
+   cleanBody.find('br').replaceWith(' ');
+   const descEl=cleanBody.find('[itemprop="description"]');
+   const rawText=descEl.length?descEl.text():cleanBody.text();
+   const text=cleanSnippet(rawText);
+   if(!text)return;
+
+   const metaScope=reviewEl.length?reviewEl:node;
+   const author=cleanSnippet(metaScope.find('.review_user, a.user').first().text(),80);
+   const ratingText=metaScope.find('.review_rating, [itemprop="ratingValue"]').first().text().trim();
    const rating=number(ratingText,5);
-   snippets.push({kind:'user',...(author?{author}:{}),...(rating!==null?{score:rating}:{}),text});
+   const sanitized=sanitizeReviewSnippet({kind:'user',...(author?{author}:{}),...(rating!==null?{score:rating}:{}),text},'rym');
+   if(!sanitized||sanitized.text.length<12)return;
+
+   const dedupeKey=`${(sanitized.author??'').toLowerCase()}\0${sanitized.text.toLowerCase()}`;
+   if(seenSnippetKeys.has(dedupeKey))return;
+   seenSnippetKeys.add(dedupeKey);
+   snippets.push(sanitized);
   });
   if(snippets.length)obs.reviewSnippets=snippets;
 

@@ -10,6 +10,7 @@ import { albumId } from '../server/policy.js';
 import { parseChart } from '../server/sources/charts.js';
 import { parseAoty, parsePitchfork, parseRym } from '../server/sources/parsers.js';
 import { Store } from '../server/store.js';
+import { hasAlbumReviewEvidence } from '../shared/review-evidence.js';
 import type { Album } from '../shared/types.js';
 
 describe('parsers, link fixes, 003 migration, and 3-platform listen links', () => {
@@ -110,12 +111,126 @@ describe('parsers, link fixes, 003 migration, and 3-platform listen links', () =
       detailCaptured: true,
       descriptors: ['ethereal', 'lush', 'melancholic']
     });
+    expect(album!.sources[0]!.reviewSnippets).toHaveLength(1);
     expect(album!.sources[0]!.reviewSnippets?.[0]).toMatchObject({
       kind: 'user',
       author: 'rym_reviewer',
       score: 4.5,
       text: 'Layered guitar washes with luminous vocal melodies throughout.'
     });
+  });
+
+  it('excludes RYM Not published placeholders/drafts, strips Published status badges, and deduplicates overlapping reviews', () => {
+    const html = `
+      <h1 class="album_title">The Same Place</h1>
+      <table class="album_info">
+        <tr><th class="info_hdr">Artist</th><td><a class="artist">The Olivia Tremor Control</a></td></tr>
+        <tr><th class="info_hdr">Type</th><td>Album</td></tr>
+        <tr><th class="info_hdr">Released</th><td>23 October 2026</td></tr>
+        <tr><th class="info_hdr">RYM Rating</th><td><span class="avg_rating">3.74</span> / 5.0 from <span class="num_ratings"><b>3,000</b> ratings</span></td></tr>
+      </table>
+      <div id="my_review" class="my_review">
+        <div id="saved_review" class="saved_review">
+          <div class="review">
+            <span class="review_user"><a class="user">example_user</a></span>
+            <div class="review_body my_review">
+              <span itemprop="description"></span>
+              <div class="review_publish_status">Not published <input class="album_shortcut" value="[Rating0]" /></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="my_review_draft">
+        <div id="saved_review" class="saved_review">
+          <div class="review">
+            <span class="review_user"><a class="user">draft_user</a></span>
+            <div class="review_body my_review">
+              <span itemprop="description">Private listening notes that are more than twelve characters long.</span>
+              <div class="review_publish_status">Not published <input class="album_shortcut" value="[Rating1]" /></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="my_review" class="my_review">
+        <div class="review">
+          <span class="review_user"><a class="user">pub_owner</a></span>
+          <span class="review_rating">4.0</span>
+          <div class="review_body my_review">
+            <span itemprop="description">Published owner review with crisp harmonies and tape collage details.</span>
+            <div class="review_publish_status">Published <input class="album_shortcut" value="[Rating99]" /></div>
+          </div>
+        </div>
+      </div>
+      <div class="reviews_shell">
+        <div class="review">
+          <a class="review_user">pub_owner</a>
+          <span class="review_rating">4.0</span>
+          <div class="review_body">
+            <span itemprop="description">Published owner review with crisp harmonies and tape collage details.</span>
+            <div class="review_publish_status">Published <input class="album_shortcut" value="[Rating99]" /></div>
+          </div>
+        </div>
+        <div class="review">
+          <a class="review_user">Turtlechris08</a>
+          <div class="review_body">
+            <span itemprop="description">초반 후반은 aoty급으로 좋은데 중반이 ㄹㅈㄷ로 루즈함</span><div class="review_publish_status">Published <input class="album_shortcut" value="[Rating23035131]" /></div>
+          </div>
+        </div>
+      </div>
+    `;
+    const parsed = parseRym(html, 'https://rateyourmusic.com/release/album/the-olivia-tremor-control/the-same-place/');
+    expect(parsed).not.toBeNull();
+    expect(parsed!.sources[0]!.reviewSnippets).toEqual([
+      {
+        kind: 'user',
+        author: 'pub_owner',
+        score: 4,
+        text: 'Published owner review with crisp harmonies and tape collage details.'
+      },
+      {
+        kind: 'user',
+        author: 'Turtlechris08',
+        text: '초반 후반은 aoty급으로 좋은데 중반이 ㄹㅈㄷ로 루즈함'
+      }
+    ]);
+
+    expect(
+      hasAlbumReviewEvidence({
+        descriptors: [],
+        sources: [
+          {
+            source: 'rym',
+            score: 3.74,
+            scale: 5,
+            votes: 3000,
+            url: 'https://rateyourmusic.com/release/album/x/y/',
+            observedAt: new Date().toISOString(),
+            status: 'ok',
+            detailCaptured: true,
+            reviewSnippets: [{ kind: 'user', author: 'example_user', text: 'Not published' }]
+          }
+        ]
+      })
+    ).toBe(false);
+
+    expect(
+      hasAlbumReviewEvidence({
+        descriptors: [],
+        sources: [
+          {
+            source: 'rym',
+            score: 3.74,
+            scale: 5,
+            votes: 3000,
+            url: 'https://rateyourmusic.com/release/album/x/y/',
+            observedAt: new Date().toISOString(),
+            status: 'ok',
+            detailCaptured: true,
+            reviewSnippets: parsed!.sources[0]!.reviewSnippets
+          }
+        ]
+      })
+    ).toBe(true);
   });
 
   it('extracts Pitchfork dek and critic snippets and fixes search fallback parameter to ?q=', () => {

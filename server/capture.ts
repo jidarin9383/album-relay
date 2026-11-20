@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { sanitizeReviewSnippets } from '../shared/review-evidence.js';
 import type { Album, ChartCapture, CaptureReceipt, Observation, SourceName } from '../shared/types.js';
 import type { Store } from './store.js';
 import { decide, todayInTimezone } from './policy.js';
@@ -40,7 +41,10 @@ export function mergeObservation(oldObs: Observation | undefined, freshObs: Obse
     if (next.criticVotes === undefined && oldObs.criticVotes !== undefined) next.criticVotes = oldObs.criticVotes;
     if (!next.descriptors?.length && oldObs.descriptors?.length) next.descriptors = [...oldObs.descriptors];
     if (!next.editorialSummary && oldObs.editorialSummary) next.editorialSummary = oldObs.editorialSummary;
-    if (!next.reviewSnippets?.length && oldObs.reviewSnippets?.length) next.reviewSnippets = structuredClone(oldObs.reviewSnippets);
+    if (!next.reviewSnippets?.length && oldObs.reviewSnippets?.length) {
+      const cleaned = sanitizeReviewSnippets(oldObs.reviewSnippets, next.source);
+      if (cleaned.length) next.reviewSnippets = cleaned;
+    }
   }
   return next;
 }

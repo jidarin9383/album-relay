@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { hasAlbumReviewEvidence } from '../../shared/review-evidence.js';
+import {
+  hasAlbumReviewEvidence,
+  normalizeAiInlineText,
+  normalizeLongReview,
+  sanitizeReviewSnippets
+} from '../../shared/review-evidence.js';
 import type { Album, AlbumAiReview } from '../../shared/types.js';
 import type { Store } from '../store.js';
 import { getAiApiKey, getAiSettings, type LlmClient } from './client.js';
@@ -36,7 +41,7 @@ export function computeAlbumEvidenceHash(album: Album): string {
         criticVotes: s.criticVotes ?? null,
         editorialSummary: s.editorialSummary ?? null,
         detailCaptured: Boolean(s.detailCaptured),
-        snippets: s.reviewSnippets ?? []
+        snippets: sanitizeReviewSnippets(s.reviewSnippets, s.source)
       }))
       .sort((a, b) => a.source.localeCompare(b.source))
   };
@@ -56,17 +61,82 @@ interface ReviewRow {
 }
 
 function rowToReview(row: ReviewRow): AlbumAiReview {
+  const audienceSummary = row.audience_summary ? normalizeAiInlineText(row.audience_summary) : '';
+  const criticSummary = row.critic_summary ? normalizeAiInlineText(row.critic_summary) : '';
   return {
     albumId: row.album_id,
     evidenceHash: row.evidence_hash,
     evidenceLevel: row.evidence_level,
-    shortReview: row.short_review,
-    longReview: row.long_review,
-    ...(row.audience_summary ? { audienceSummary: row.audience_summary } : {}),
-    ...(row.critic_summary ? { criticSummary: row.critic_summary } : {}),
+    shortReview: normalizeAiInlineText(row.short_review),
+    longReview: normalizeLongReview(row.long_review),
+    ...(audienceSummary ? { audienceSummary } : {}),
+    ...(criticSummary ? { criticSummary } : {}),
     model: row.model,
     generatedAt: row.generated_at
   };
+}
+
+export function sanitizeStoredReviewsAndSnippets(store: Store): {
+  cleanedAlbums: number;
+  normalizedReviews: number;
+  purgedReviews: number;
+} {
+  const albums = store.albums();
+  let cleanedAlbums = 0;
+  let albumsChanged = false;
+
+  for (const album of albums) {
+    let albumModified = false;
+    for (const obs of album.sources ?? []) {
+      if (!obs.reviewSnippets) continue;
+      const cleaned = sanitizeReviewSnippets(obs.reviewSnippets, obs.source);
+      if (JSON.stringify(cleaned) !== JSON.stringify(obs.reviewSnippets)) {
+        if (cleaned.length) obs.reviewSnippets = cleaned;
+        else delete obs.reviewSnippets;
+        albumModified = true;
+      }
+    }
+    if (albumModified) {
+      cleanedAlbums++;
+      albumsChanged = true;
+    }
+  }
+  if (albumsChanged) {
+    store.saveAlbums(albums);
+  }
+
+  const albumsById = new Map(albums.map((a) => [a.id, a]));
+  const rows = store.database.prepare('SELECT * FROM album_reviews_ai').all() as unknown as ReviewRow[];
+  const deleteStmt = store.database.prepare('DELETE FROM album_reviews_ai WHERE album_id = ?');
+  const updateStmt = store.database.prepare(
+    'UPDATE album_reviews_ai SET short_review = ?, long_review = ?, audience_summary = ?, critic_summary = ? WHERE album_id = ?'
+  );
+
+  let normalizedReviews = 0;
+  let purgedReviews = 0;
+  for (const row of rows) {
+    const album = albumsById.get(row.album_id);
+    if (album && !hasAlbumReviewEvidence(album)) {
+      deleteStmt.run(row.album_id);
+      purgedReviews++;
+      continue;
+    }
+    const nextShort = normalizeAiInlineText(row.short_review);
+    const nextLong = normalizeLongReview(row.long_review);
+    const nextAudience = row.audience_summary ? normalizeAiInlineText(row.audience_summary) || null : null;
+    const nextCritic = row.critic_summary ? normalizeAiInlineText(row.critic_summary) || null : null;
+    if (
+      nextShort !== row.short_review ||
+      nextLong !== row.long_review ||
+      nextAudience !== row.audience_summary ||
+      nextCritic !== row.critic_summary
+    ) {
+      updateStmt.run(nextShort, nextLong, nextAudience, nextCritic, row.album_id);
+      normalizedReviews++;
+    }
+  }
+
+  return { cleanedAlbums, normalizedReviews, purgedReviews };
 }
 
 export function purgeSpeculativeAiReviews(store: Store): number {
@@ -103,10 +173,18 @@ function buildReviewEvidencePacket(album: Album) {
   ].slice(0, 15);
 
   const audienceSnippets = album.sources
-    .flatMap((s) => (s.reviewSnippets ?? []).filter((r) => r.kind === 'user').map((r) => ({ source: s.source, ...r })))
+    .flatMap((s) =>
+      sanitizeReviewSnippets(s.reviewSnippets, s.source)
+        .filter((r) => r.kind === 'user')
+        .map((r) => ({ source: s.source, ...r }))
+    )
     .slice(0, 6);
   const criticSnippets = album.sources
-    .flatMap((s) => (s.reviewSnippets ?? []).filter((r) => r.kind === 'critic').map((r) => ({ source: s.source, ...r })))
+    .flatMap((s) =>
+      sanitizeReviewSnippets(s.reviewSnippets, s.source)
+        .filter((r) => r.kind === 'critic')
+        .map((r) => ({ source: s.source, ...r }))
+    )
     .slice(0, 6);
 
   return {
@@ -195,7 +273,7 @@ export async function generateAlbumAiReview(
     '4. 禁止空洞套话：严禁出现“值得整张聆听”“适合深夜佩戴耳机”“带来全新听觉体验”“令人耳目一新”“点开原网站详情页”等任何水词或系统提示。',
     'JSON 字段结构（唱片档案卡）：',
     '- shortReview: 16–42 字中文一句话提炼，必须直接概括输入摘录或描述词里的核心评价点（不得含分数、站名、脑补词汇或套话）。',
-    '- longReview: 中文档案笔记（用空行 \\n\\n 分节），可从以下 4 个带方括号标题中选用有输入素材支撑的小节；**若某个小节在输入素材中缺乏具体依据，直接省略该小节，绝不允许硬凑或靠猜补齐**：',
+    '- longReview: 中文档案笔记，各小节之间用一个实际空行分段（严禁输出字面转义符如反斜杠加 n）。可从以下 4 个带方括号标题中选用有输入素材支撑的小节；**若某个小节在输入素材中缺乏具体依据，直接省略该小节，绝不允许硬凑或靠猜补齐**：',
     '  【声音质地】仅提炼原页描述词或乐评原文里明确写出的音色、节奏、人声与编配特征。',
     '  【风格坐标】仅结合输入流派、描述词与原文对创作定位的讨论做概括。',
     '  【口碑拆解】解读大众评分与媒体评价之间的共识点、关注焦点或分歧所在（不复述数字）。',
@@ -213,15 +291,17 @@ export async function generateAlbumAiReview(
     schema: reviewOutputSchema
   });
 
+  const audienceSummary = parsed.audienceSummary ? normalizeAiInlineText(parsed.audienceSummary) : '';
+  const criticSummary = parsed.criticSummary ? normalizeAiInlineText(parsed.criticSummary) : '';
   const now = new Date().toISOString();
   const review: AlbumAiReview = {
     albumId: album.id,
     evidenceHash,
     evidenceLevel,
-    shortReview: parsed.shortReview,
-    longReview: parsed.longReview,
-    ...(parsed.audienceSummary ? { audienceSummary: parsed.audienceSummary } : {}),
-    ...(parsed.criticSummary ? { criticSummary: parsed.criticSummary } : {}),
+    shortReview: normalizeAiInlineText(parsed.shortReview),
+    longReview: normalizeLongReview(parsed.longReview),
+    ...(audienceSummary ? { audienceSummary } : {}),
+    ...(criticSummary ? { criticSummary } : {}),
     model: settings.model,
     generatedAt: now
   };
