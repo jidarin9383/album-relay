@@ -105,7 +105,7 @@ function Empty({
 
 function BrandEmblem() {
   return (
-    <svg className="brand-emblem" width="36" height="36" viewBox="0 0 36 36" fill="none" role="img" aria-label="新声簿标志">
+    <svg className="brand-emblem" width="36" height="36" viewBox="0 0 36 36" fill="none" role="img" aria-label="听点好的标志">
       <rect width="36" height="36" rx="7" fill="#121316" />
       <circle cx="18" cy="18" r="12.5" stroke="#F5F5F3" strokeOpacity="0.26" strokeWidth="1" />
       <circle cx="18" cy="18" r="9.5" stroke="#F5F5F3" strokeOpacity="0.5" strokeWidth="1" strokeDasharray="3 2" />
@@ -326,8 +326,8 @@ function App() {
           >
             <BrandEmblem />
             <div className="brand-titles">
-              <strong className="brand-cn">新声簿</strong>
-              <span className="brand-en">ALBUM RELAY</span>
+              <strong className="brand-cn">听点好的</strong>
+              <span className="brand-en">LISTEN BETTER</span>
             </div>
           </a>
           <button
@@ -572,8 +572,8 @@ function App() {
           )}
 
           <footer className="page-footer">
-            <span>新声簿 · Album Relay</span>
-            <span>好音乐，值得再传一程。</span>
+            <span>听点好的 · Listen Better</span>
+            <span>不迎合热歌榜，给挑剔耳朵的严肃新专策展。</span>
           </footer>
         </main>
       </div>
@@ -600,7 +600,7 @@ function Auth({
       <div className="auth-hero-pane">
         <div className="od-field" style={{ '--od-gap': '4px' } as React.CSSProperties}>
           <span className="eyebrow" style={{ color: 'var(--ink-on-dark-muted)' }}>
-            新声簿 · ALBUM RELAY
+            听点好的 · LISTEN BETTER
           </span>
         </div>
 
@@ -609,18 +609,18 @@ function Auth({
             <div className="hero-vinyl-label">
               <span className="vinyl-label-rpm">33⅓ RPM · STEREO</span>
               <strong style={{ fontFamily: 'var(--font-serif)', fontSize: '0.95rem', letterSpacing: '0.03em', lineHeight: 1.1 }}>
-                NEW SOUNDS
+                LISTEN
                 <br />
-                GOOD FINDS
+                BETTER
               </strong>
             </div>
           </div>
         </div>
 
         <div className="od-stack" style={{ '--od-gap': '10px' } as React.CSSProperties}>
-          <h1 className="auth-tagline-cn">跨越评分，抵达耳边</h1>
+          <h1 className="auth-tagline-cn">不迎合热歌，只听点好的</h1>
           <p style={{ color: 'var(--ink-on-dark-muted)', fontSize: 'var(--text-body)' }}>
-            聚合 AOTY、RYM 与 Pitchfork 高分共识，自动整理你的网易云月度新专歌单。
+            聚合 AOTY、RYM 与 Pitchfork 严肃乐评，结合 AI 与你的个人品味筛选独立新专，自动同步网易云月度歌单。
           </p>
         </div>
       </div>
@@ -647,7 +647,7 @@ function Auth({
           >
             <div className="od-stack" style={{ '--od-gap': '8px' } as React.CSSProperties}>
               <h2 className="cjk-heading" style={{ fontSize: 'var(--text-h2)' }}>
-                {isSetup ? '初始化新声簿' : '欢迎回到新声簿'}
+                {isSetup ? '初始化「听点好的」' : '欢迎回到「听点好的」'}
               </h2>
               <p className="field-hint" style={{ fontSize: 'var(--text-sm)' }}>
                 {isSetup ? '设置至少 12 位管理员密码，开始自动收录与精选。' : '输入管理员密码，查看你的最新高分推荐。'}
@@ -677,7 +677,7 @@ function Auth({
 
             <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={busy || !session}>
               {busy && <Spinner size={15} />}
-              <span>{isSetup ? '完成初始化' : '进入新声簿'}</span>
+              <span>{isSetup ? '完成初始化' : '进入「听点好的」'}</span>
               <ArrowRight size={16} />
             </button>
 
@@ -699,7 +699,7 @@ function Auth({
         </div>
 
         <div className="od-row" style={{ justifyContent: 'space-between', fontSize: 'var(--text-xs)', color: 'var(--ink-tertiary)' }}>
-          <span>新声簿 · Album Relay</span>
+          <span>听点好的 · Listen Better</span>
         </div>
       </div>
     </section>

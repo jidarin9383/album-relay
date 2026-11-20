@@ -7,7 +7,7 @@ import type { Store } from '../store.js';
 const CACHE_TTL_MS = 7 * 86_400_000;
 const REQUEST_TIMEOUT_MS = 8_000;
 const WIKIDATA_SPARQL_URL = 'https://query.wikidata.org/sparql';
-const USER_AGENT = 'AlbumRelay/0.2.0 (+https://github.com/jidarin9383/album-relay)';
+const USER_AGENT = 'ListenBetter/0.2.0 (+https://github.com/jidarin9383/listen-better)';
 export interface CorroborateOptions {
   maxCatalogLookups?: number;
   maxWikidataUrls?: number;

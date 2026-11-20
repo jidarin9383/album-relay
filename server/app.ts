@@ -24,7 +24,7 @@ import { buildListenLinks, readListenLinksCacheMap, resolveAlbumListenLinks } fr
 import { DefaultLlmClient, getAiApiKey, getAiSettings, saveAiSettings, type LlmClient } from './ai/client.js';
 import { isSameAiEndpoint, normalizeAiBaseUrl } from '../shared/ai-endpoint.js';
 import { buildMonthlyAiDraft, readLatestMonthlyDraft } from './ai/playlist.js';
-import { generateAlbumAiReview, readAiReviewsMap, ReviewQueue } from './ai/reviews.js';
+import { generateAlbumAiReview, purgeSpeculativeAiReviews, readAiReviewsMap, ReviewQueue } from './ai/reviews.js';
 import { generateRecommendationsSmart, readLatestPersona } from './ai/curator.js';
 import { importPersonalData, listImportBatches } from './personal/imports.js';
 import { addManualFavorite, recordAlbumFeedback } from './personal/feedback.js';
@@ -106,6 +106,12 @@ export async function createApp(options:{dataDir:string;scheduler?:boolean;sourc
    store.setValue('policy-migrated-v4','true');
   });
  }
+ if(store.getValue('reviews-strict-evidence-v1')!=='true'){
+  store.transaction(()=>{
+   purgeSpeculativeAiReviews(store);
+   store.setValue('reviews-strict-evidence-v1','true');
+  });
+ }
  const automation=options.scheduler===false?null:new AutomationCoordinator({store,aiClient,reviewQueue,runner,netease});
  const scheduler=automation?new Scheduler(store,()=>automation.triggerNow()):null;
  automation?.bootstrapIfNeeded();
@@ -150,7 +156,7 @@ export async function createApp(options:{dataDir:string;scheduler?:boolean;sourc
   const pathname=req.url.split('?')[0]??'';
   if(pathname.startsWith(EXTENSION_PREFIX)){
    // The paired extension authenticates with its bearer token only; session cookies are never accepted here.
-   if(!extension.authenticate(req.headers.authorization))return reply.code(401).send({error:'扩展未配对或令牌已失效，请在 Album Relay 重新生成配对令牌'});
+   if(!extension.authenticate(req.headers.authorization))return reply.code(401).send({error:'扩展未配对或令牌已失效，请在「听点好的」重新生成配对令牌'});
    return;
   }
   if(!pathname.startsWith('/api/'))return;
@@ -386,7 +392,7 @@ export async function createApp(options:{dataDir:string;scheduler?:boolean;sourc
    return {review,album:presentAlbum(album,store.covers(),readListenLinksCacheMap(store),readAiReviewsMap(store))};
   }catch(e){
    const message=e instanceof Error?e.message:'AI 评论生成失败';
-   return reply.code(/启用并配置/.test(message)?400:502).send({error:message});
+   return reply.code(/启用并配置|暂无原页乐评/.test(message)?400:502).send({error:message});
   }
  });
  app.post('/api/ai/reviews/generate-selected',async(_req,reply)=>{
@@ -436,7 +442,7 @@ export async function createApp(options:{dataDir:string;scheduler?:boolean;sourc
   extension.saveRefresh(parsed.data);return extension.state(store.albums());
  });
  // Extension side (bearer token, see onRequest hook).
- app.get('/api/ext/config',async(req)=>{const version=req.headers['x-album-relay-extension'];extension.seen(typeof version==='string'?version:undefined);return extension.config(store.albums());});
+ app.get('/api/ext/config',async(req)=>{const version=req.headers['x-listen-better-extension']??req.headers['x-album-relay-extension'];extension.seen(typeof version==='string'?version:undefined);return extension.config(store.albums());});
  const extensionPage=z.object({url:z.string().url().max(2000),html:z.string().min(1).max(EXTENSION_BODY_LIMIT)});
  app.post('/api/ext/capture',{bodyLimit:EXTENSION_BODY_LIMIT},async(req,reply)=>{
   const parsed=extensionPage.safeParse(req.body);

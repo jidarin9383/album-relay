@@ -1,6 +1,12 @@
 const $ = (id) => document.getElementById(id);
 const STATE = { ok: '已收录', skipped: '已跳过', challenge: '需要验证', error: '失败' };
-const RUN = { scheduled: '已排队，即将开始', running: '进行中', done: '已完成', challenge: '遇到验证，已暂停（请在留下的标签页里手动完成）' };
+const RUN = {
+  scheduled: '已排队，即将开始',
+  running: '进行中',
+  waiting_window: '等待打开 Chrome 窗口后自动继续',
+  done: '已完成',
+  challenge: '遇到验证，已暂停（请在留下的标签页里手动完成）'
+};
 const time = (at) => (at ? new Date(at).toLocaleString('zh-CN') : '—');
 
 function show(text, cls) {
@@ -16,11 +22,20 @@ async function render() {
   if (document.activeElement !== $('token')) $('token').value = s.token || '';
   const refresh = s.config?.refresh;
   const backfill = s.config?.detailBackfill;
+  const formatRunSummary = (run) => {
+    if (!run) return '—';
+    const phaseLabel = run.phase === 'backfill' ? '详情补抓' : '榜单刷新';
+    const statusLabel = RUN[run.status] || run.status;
+    if (run.status === 'running' && Array.isArray(run.queue) && run.queue.length) {
+      return `${time(run.startedAt)} · ${statusLabel}（${phaseLabel} ${Math.min(run.index + 1, run.queue.length)}/${run.queue.length}）`;
+    }
+    return `${time(run.startedAt)} · ${phaseLabel} · ${statusLabel}`;
+  };
   const rows = [
-    ['巡检状态', refresh ? (refresh.enabled ? `已开启，每天 ${refresh.hour}:00 后执行` : '未开启') : '尚未读取新声簿配置'],
+    ['巡检状态', refresh ? (refresh.enabled ? `已开启，每天 ${refresh.hour}:00 后执行` : '未开启') : '尚未读取「听点好的」配置'],
     ['巡检页面', refresh?.targets?.length ? refresh.targets.join('\n') : '—'],
-    ['详情补抓', backfill?.enabled ? `已开启（每批 ${backfill.batchSize} 页 · 待补 ${backfill.pendingCount ?? 0} 个链接）` : '未开启'],
-    ['上次巡检', s.run ? `${time(s.run.startedAt)} · ${RUN[s.run.status] || s.run.status}` : '—'],
+    ['详情补抓', backfill?.enabled ? `已开启（每批 ${backfill.batchSize} 页 · 待补 ${backfill.pendingCount ?? 0} 个链接 · 榜后自动接力并每 30 分钟续补）` : '未开启'],
+    ['上次巡检', formatRunSummary(s.run)],
     ['最近联系', s.lastError ? `${time(s.lastContact)}（失败：${s.lastError}）` : time(s.lastContact)]
   ];
   $('refresh').replaceChildren(...rows.flatMap(([k, v]) => {
@@ -52,14 +67,14 @@ $('save').addEventListener('click', async () => {
     return;
   }
   const token = $('token').value.trim();
-  if (!/^ar_[A-Za-z0-9_-]{20,100}$/.test(token)) {
-    show('配对令牌格式不对，请从 Album Relay 复制完整令牌', 'error');
+  if (!/^(?:lb|ar)_[A-Za-z0-9_-]{20,100}$/.test(token)) {
+    show('配对令牌格式不对，请从「听点好的」复制完整令牌', 'error');
     return;
   }
-  // Only the configured Album Relay origin is granted, not every site.
+  // Only the configured Listen Better origin is granted, not every site.
   const granted = await chrome.permissions.request({ origins: [`${origin}/*`] });
   if (!granted) {
-    show('需要允许扩展访问这个 Album Relay 地址才能发送页面', 'error');
+    show('需要允许扩展访问这个「听点好的」地址才能发送页面', 'error');
     return;
   }
   await chrome.storage.local.set({ server: origin, token });

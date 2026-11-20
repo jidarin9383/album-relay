@@ -1,4 +1,4 @@
-// End-to-end smoke test for the Chrome extension against a real Album Relay server.
+// End-to-end smoke test for the Chrome extension against a real Listen Better server.
 // Source sites are never contacted: Chromium resolves the source hostnames to a local HTTPS fixture server
 // (--host-resolver-rules), so even tabs opened by the extension itself cannot reach the real sites.
 // Run: npx tsx scripts/extension-smoke.ts   (SMOKE_CHROMIUM=/path/to/Chrome-for-Testing to use another Chromium build)
@@ -80,7 +80,7 @@ try{
  assert(isolated.refresh?.enabled === false && isolated.refresh?.detailBackfill === false,
    'automatic patrol and detail backfill are disabled before pairing');
  const {token}=await admin('/api/extension/token',{method:'POST',body:'{}'});
- assert(typeof token==='string'&&token.startsWith('ar_'),'administrator issues a pairing token');
+ assert(typeof token==='string'&&token.startsWith('lb_'),'administrator issues a pairing token');
  const worker=context.serviceWorkers()[0]??await context.waitForEvent('serviceworker');
  worker.on('console',m=>console.log('[worker]',m.text()));
  context.on('page',p=>p.on('console',m=>console.log('[page]',m.text())));

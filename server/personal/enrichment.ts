@@ -3,7 +3,7 @@ import type { Store } from '../store.js';
 import { normalizeIdentity } from '../sources/parsers.js';
 import { buildTasteProfile, splitArtistNorms } from './profile.js';
 
-const USER_AGENT = 'AlbumRelay/0.2.0 (+https://github.com/jidarin9383/album-relay)';
+const USER_AGENT = 'ListenBetter/0.2.0 (+https://github.com/jidarin9383/listen-better)';
 const SPARQL_URL = 'https://query.wikidata.org/sparql';
 const MUSICBRAINZ_ARTIST_URL = 'https://musicbrainz.org/ws/2/artist/';
 const REQUEST_TIMEOUT_MS = 10_000;

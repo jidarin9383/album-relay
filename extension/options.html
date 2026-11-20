@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <title>Album Relay Capture</title>
+  <title>听点好的 · Listen Better Capture</title>
   <style>
     :root { color-scheme: light dark; --line: #8884; --muted: #888; }
     body { font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; }
@@ -20,19 +20,19 @@
   </style>
 </head>
 <body>
-  <h1>新声簿扩展 · Album Relay Capture</h1>
-  <p class="lead">在日常 Chrome 中打开 RYM、AOTY 或 Pitchfork 页面即可自动送入新声簿资料库；遇站点验证由你手动完成，扩展绝不代点。</p>
+  <h1>听点好的扩展 · Listen Better Capture</h1>
+  <p class="lead">在日常 Chrome 中打开 RYM、AOTY 或 Pitchfork 页面即可自动送入「听点好的」资料库；遇站点验证由你手动完成，扩展绝不代点。</p>
 
   <h2>连接设置</h2>
-  <label for="server">新声簿地址</label>
+  <label for="server">服务端地址</label>
   <input id="server" placeholder="http://192.168.1.10:3210" autocomplete="off">
   <label for="token">配对令牌</label>
-  <input id="token" placeholder="在新声簿「设置 → 连接与同步」生成，以 ar_ 开头" autocomplete="off">
+  <input id="token" placeholder="在「听点好的」的「设置 → 连接与同步」生成，以 lb_ 或 ar_ 开头" autocomplete="off">
   <button id="save">保存并连接</button>
   <div id="connection" class="status" hidden></div>
 
   <h2>每日巡检</h2>
-  <p class="muted">开关、时间与巡检页面在新声簿「设置 → 连接与同步」中配置，需保持 Chrome 开启。</p>
+  <p class="muted">开关、时间与巡检页面在「听点好的」的「设置 → 连接与同步」中配置，需保持 Chrome 开启。</p>
   <dl id="refresh"></dl>
   <button id="run" class="secondary">立即巡检一次</button>
   <button id="backfill" class="secondary">立即补抓详情页</button>

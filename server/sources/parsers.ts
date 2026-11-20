@@ -4,7 +4,8 @@ import type { Album, CapturedStreamingLinks, ReviewSnippet, SourceName } from '.
 export const origins: Record<SourceName,string>={aoty:'https://www.albumoftheyear.org',rym:'https://rateyourmusic.com',pitchfork:'https://pitchfork.com'};
 export function normalizeIdentity(s:string):string{return s.normalize('NFKD').replace(/\p{M}/gu,'').toLowerCase().replace(/\s*&\s*|\s+\/\s+/g,' and ').replace(/[^\p{L}\p{N}]/gu,'');}
 export function parseVotes(value:string):number|null{const m=value.replace(/,/g,'').match(/(\d+(?:\.\d+)?)\s*([km])?/i);return m?Math.round(Number(m[1])*(m[2]?.toLowerCase()==='k'?1000:m[2]?.toLowerCase()==='m'?1000000:1)):null;}
-export function isChallenge(html:string,status:number):boolean{return [403,429,503].includes(status)||/just a moment|verify (?:you are|that you)|checking your browser|cf-chl-|captcha|access denied|rate limit exceeded/i.test(html.slice(0,150000));}
+const CHALLENGE_RE = /just a moment|verify (?:you are|that you)|checking your browser|checking if the site connection is secure|performing security verification|complete the security check|ip address is temporarily blocked|cf-chl-|captcha|access denied|rate limit exceeded|请稍候|請稍候|请验证您是真人|确认您是真人|验证您(?:是否)?是真人|正在验证您(?:是否)?是真人|請驗證您是真人|驗證您是人類|請確認您是真人|確認您是真人|正在检查您的浏览器|正在檢查您的瀏覽器|需要检查您的连接安全性|需要檢查您的連線安全性|安全验证|安全驗證/i;
+export function isChallenge(html:string,status:number):boolean{return [403,429,503].includes(status)||CHALLENGE_RE.test(html.slice(0,150000));}
 function date(s:string):string{if(!s||!(/\d{4}-\d{2}-\d{2}/.test(s)||/[A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+[A-Za-z]+\s+\d{4}/.test(s)))return ''; const v=Date.parse(/^\d{4}-\d{2}-\d{2}/.test(s)?s.slice(0,10)+"T00:00:00Z":s+" UTC");return Number.isFinite(v)?new Date(v).toISOString().slice(0,10):'';}
 export function cleanImageUrl(raw?:string|null):string|undefined{
  if(!raw)return undefined;

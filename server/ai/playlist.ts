@@ -249,7 +249,7 @@ export async function generateAiPlaylistDescription(
 ): Promise<string> {
   const limit = Math.max(20, Math.min(1000, maxChars));
   if (!albums.length) {
-    return trimToBoundary(`新声簿月度新专精选（${month}），等待新的高分专辑收录同步。`, limit);
+    return trimToBoundary(`听点好的月度新专精选（${month}），等待新的高分专辑收录同步。`, limit);
   }
 
   const aiSettings = getAiSettings(store as Store);

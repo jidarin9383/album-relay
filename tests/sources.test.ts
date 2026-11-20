@@ -26,7 +26,17 @@ describe('source extraction (sanitized structural fixtures)', () => {
   expect(parsePitchfork(`<script>window.__PRELOADED_STATE__=${JSON.stringify(ep)};</script>`,'https://pitchfork.com/reviews/albums/sun-araw-rapid-response-ep/')).toMatchObject({releaseDate:'',format:'EP',genres:['Experimental']});
  });
  it('excludes best new reissues from BNM',()=>{const a=parsePitchfork('<script>window.__PRELOADED_STATE__={"transformed":{"review":{"headerProps":{"artists":[{"name":"A"}],"title":"B","musicRating":{"rating":9,"bestNewMusic":true,"bestNewReissue":true}}}}};</script>','https://pitchfork.com/reviews/albums/a-b/');expect(a?.format).toBe('Reissue');expect(a?.sources[0]?.bestNewMusic).toBe(false);});
- it('extracts bounded source-specific links and detects challenges',()=>{expect(parseIndex('<a href="/album/1-test.php">A</a><a href="/album/1-test.php">A</a><a href="https://evil.test/album/2.php">B</a>','aoty')).toEqual(['https://www.albumoftheyear.org/album/1-test.php']);expect(isChallenge('Just a moment... Checking your browser',200)).toBe(true);expect(isChallenge('normal',403)).toBe(true);});
+ it('extracts bounded source-specific links and detects challenges',()=>{
+  expect(parseIndex('<a href="/album/1-test.php">A</a><a href="/album/1-test.php">A</a><a href="https://evil.test/album/2.php">B</a>','aoty')).toEqual(['https://www.albumoftheyear.org/album/1-test.php']);
+  expect(isChallenge('Just a moment... Checking your browser',200)).toBe(true);
+  expect(isChallenge('normal',403)).toBe(true);
+  expect(isChallenge('<title>请稍候…</title><p>请验证您是真人</p>',200)).toBe(true);
+  expect(isChallenge('<p>正在验证您是否是真人</p>',200)).toBe(true);
+  expect(isChallenge('<p>需要检查您的连接安全性</p>',200)).toBe(true);
+  expect(isChallenge('<title>請稍候…</title><p>驗證您是人類</p>',200)).toBe(true);
+  expect(isChallenge('<p>Performing security verification</p>',200)).toBe(true);
+  expect(isChallenge('<div class="albumTitle">Normal Album Page</div><div class="albumUserScore">85</div>',200)).toBe(false);
+ });
  it('normalizes Unicode punctuation and slash/ampersand collaborations without conflating editions',()=>{
   expect(normalizeIdentity('Beyoncé — Moon')).toBe(normalizeIdentity('Beyonce Moon'));
   expect(normalizeIdentity('Aesop Rock / Blockhead')).toBe(normalizeIdentity('Aesop Rock & Blockhead'));

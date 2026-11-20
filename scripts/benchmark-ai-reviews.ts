@@ -10,6 +10,7 @@ import { writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import { DefaultLlmClient, extractJsonText, GEMINI_DEFAULT_BASE_URL } from '../server/ai/client.js';
+import { resolveDbPath } from '../server/store.js';
 import type { AiSettings, Album } from '../shared/types.js';
 
 export type FormatVariantId = 'A' | 'B' | 'C';
@@ -154,7 +155,7 @@ export function buildPromptForVariant(variant: FormatVariantId): { name: string;
 }
 
 function loadBenchmarkCases(): BenchmarkCase[] {
-  const db = new DatabaseSync('./data/album-relay.sqlite', { readOnly: true });
+  const db = new DatabaseSync(resolveDbPath('./data'), { readOnly: true });
   try {
     const raw = db.prepare('SELECT value FROM config WHERE key = ?').get('albums') as { value: string } | undefined;
     const albums: Album[] = raw ? (JSON.parse(raw.value) as Album[]) : [];

@@ -9,7 +9,7 @@ COPY web ./web
 RUN npm run build && npm prune --omit=dev
 
 FROM node:24-bookworm-slim
-ENV NODE_ENV=production PORT=3210 ALBUM_RELAY_DATA_DIR=/data
+ENV NODE_ENV=production PORT=3210 LISTEN_BETTER_DATA_DIR=/data
 WORKDIR /app
 RUN mkdir /data && chown node:node /data
 COPY --from=build --chown=node:node /app/node_modules ./node_modules

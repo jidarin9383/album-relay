@@ -10,10 +10,26 @@
 
   const QUIET_MS = 1200;
   const MAX_WAIT_MS = 8000;
-  const challenged = () =>
-    /just a moment|verify you are human|checking your browser|attention required/i.test(document.title) ||
+  const INTERSTITIAL_SELECTOR =
+    '#challenge-form, #challenge-running, #cf-challenge-running, #challenge-stage, .cf-browser-verification, #challenge-error-text, #challenge-body-text, #cf-wrapper';
+  const SITE_CONTENT_SELECTOR =
+    '.page_charts_section_charts_item, .albumListRow, .album_title, .albumTitle, .albumUserScore, [data-testid="ReviewPage"], main a[href^="/reviews/albums/"], article';
+  const TURNSTILE_SELECTOR =
+    '#turnstile-wrapper, .cf-turnstile, iframe[src*="challenges.cloudflare.com"], input[name="cf-turnstile-response"]';
+  const CHALLENGE_TITLE_RE =
+    /just a moment|verify you are human|checking your browser|attention required|请稍候|請稍候|请稍等|請稍等|正在检查您的浏览器|正在檢查您的瀏覽器|安全验证|安全驗證/i;
+  const CHALLENGE_BODY_RE =
+    /verify (?:you are|that you are) human|checking if the site connection is secure|performing security verification|complete the security check|ip address is temporarily blocked|too many requests|请验证您是真人|确认您是真人|验证您(?:是否)?是真人|正在验证您(?:是否)?是真人|請驗證您是真人|驗證您是人類|請確認您是真人|確認您是真人|正在检查您的浏览器|正在檢查您的瀏覽器|需要检查您的连接安全性|需要檢查您的連線安全性|安全验证|安全驗證/i;
+
+  const hasSiteContent = () => !!document.querySelector(SITE_CONTENT_SELECTOR);
+  const challenged = () => {
     // Interstitial markers only: Cloudflare also loads /cdn-cgi/challenge-platform scripts on normal pages.
-    !!document.querySelector('#challenge-form, #challenge-running, #cf-challenge-running, #challenge-stage, .cf-browser-verification');
+    if (document.querySelector(INTERSTITIAL_SELECTOR)) return true;
+    if (hasSiteContent()) return false;
+    if (CHALLENGE_TITLE_RE.test((document.title || '').trim())) return true;
+    if (document.querySelector(TURNSTILE_SELECTOR)) return true;
+    return CHALLENGE_BODY_RE.test((document.body?.innerText || '').slice(0, 8000));
+  };
 
   // Wait until the DOM stops changing (or a cap is reached) so lazily rendered rows are included.
   const settle = () =>

@@ -1,4 +1,5 @@
 import { it, expect } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -40,8 +41,8 @@ it('pairs the extension with a bearer token that is isolated from session cookie
   expect((await t.app.inject({url:'/api/ext/config',headers:{cookie:t.cookie}})).statusCode).toBe(401);
   expect((await t.app.inject({url:'/api/extension',headers:{cookie:t.cookie}})).json()).toMatchObject({paired:false});
   const first=(await t.app.inject({method:'POST',url:'/api/extension/token',headers:{cookie:t.cookie}})).json().token as string;
-  expect(first).toMatch(/^ar_/);
-  const ext={authorization:`Bearer ${first}`,origin:'chrome-extension://abcdefghijklmnop','x-album-relay-extension':'0.1.0'};
+  expect(first).toMatch(/^lb_/);
+  const ext={authorization:`Bearer ${first}`,origin:'chrome-extension://abcdefghijklmnop','x-listen-better-extension':'0.3.3'};
   const config=await t.app.inject({url:'/api/ext/config',headers:ext});
   expect(config.statusCode).toBe(200);
   expect(config.json().refresh).toMatchObject({enabled:true,hour:10});
@@ -50,7 +51,17 @@ it('pairs the extension with a bearer token that is isolated from session cookie
   // The bearer token does not open administrator endpoints.
   expect((await t.app.inject({url:'/api/extension',headers:{authorization:ext.authorization}})).statusCode).toBe(401);
   const state=(await t.app.inject({url:'/api/extension',headers:{cookie:t.cookie}})).json();
-  expect(state).toMatchObject({paired:true,version:'0.1.0'});expect(state.lastSeen).toBeTruthy();
+  expect(state).toMatchObject({paired:true,version:'0.3.3'});expect(state.lastSeen).toBeTruthy();
+  // Legacy ar_ tokens and x-album-relay-extension headers remain accepted.
+  const store=new Store(t.dir);
+  try{
+   const legacyToken='ar_legacyTokenValue_0123456789abcdef';
+   store.setValue('extension-token',createHash('sha256').update(legacyToken).digest('hex'));
+   const legacyRes=await t.app.inject({url:'/api/ext/config',headers:{authorization:`Bearer ${legacyToken}`,'x-album-relay-extension':'0.3.2'}});
+   expect(legacyRes.statusCode).toBe(200);
+   const legacyState=(await t.app.inject({url:'/api/extension',headers:{cookie:t.cookie}})).json();
+   expect(legacyState).toMatchObject({paired:true,version:'0.3.2'});
+  }finally{store.close();}
   // Re-issuing revokes the previous token.
   const second=(await t.app.inject({method:'POST',url:'/api/extension/token',headers:{cookie:t.cookie}})).json().token as string;
   expect((await t.app.inject({url:'/api/ext/config',headers:ext})).statusCode).toBe(401);

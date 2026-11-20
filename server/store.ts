@@ -1,12 +1,24 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Settings, Album, Playlist, Run, SourceStatus, CaptureReceipt } from '../shared/types.js';
 import { defaultSettings } from './policy.js';
 import { runMigrations } from './db/migrations.js';
+
+export const DB_FILENAME = 'listen-better.sqlite';
+export const LEGACY_DB_FILENAME = 'album-relay.sqlite';
+
+export function resolveDbPath(dir: string): string {
+ const current = join(dir, DB_FILENAME);
+ if (existsSync(current)) return current;
+ const legacy = join(dir, LEGACY_DB_FILENAME);
+ if (existsSync(legacy)) return legacy;
+ return current;
+}
+
 export class Store {
  private db:DatabaseSync;
- constructor(dir:string){mkdirSync(dir,{recursive:true,mode:0o700});this.db=new DatabaseSync(join(dir,'album-relay.sqlite'));this.db.exec('PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS job_lock (id INTEGER PRIMARY KEY CHECK(id=1), owner TEXT NOT NULL);');runMigrations(this.db,dir,this.albums());}
+ constructor(dir:string){mkdirSync(dir,{recursive:true,mode:0o700});this.db=new DatabaseSync(resolveDbPath(dir));this.db.exec('PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS job_lock (id INTEGER PRIMARY KEY CHECK(id=1), owner TEXT NOT NULL);');runMigrations(this.db,dir,this.albums());}
  get database():DatabaseSync{return this.db;}
  settings():Settings {const r=this.db.prepare('SELECT value FROM config WHERE key=?').get('settings') as {value:string}|undefined;return r?JSON.parse(r.value) as Settings:structuredClone(defaultSettings)}
  saveSettings(settings:Settings):void{this.db.prepare('INSERT INTO config(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run('settings',JSON.stringify(settings))}

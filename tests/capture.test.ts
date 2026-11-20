@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { parseChart } from '../server/sources/charts.js';
+import { parseChart, parseCapturedPage } from '../server/sources/charts.js';
 import { saveCapture } from '../server/capture.js';
 import { Store } from '../server/store.js';
 import { decide, defaultSettings } from '../server/policy.js';
@@ -121,7 +121,7 @@ describe('current chart capture',()=>{
    expect(listed).toHaveLength(100);
    expect(listed[0]?.pageUrl).toBe(`${aotyUrl}?p=105`);
    expect(listed[99]?.pageUrl).toBe(`${aotyUrl}?p=6`);
-   const db=new DatabaseSync(join(dir,'album-relay.sqlite'));
+   const db=new DatabaseSync(join(dir,'listen-better.sqlite'));
    try{
     const row=db.prepare('SELECT COUNT(*) AS count FROM captures').get() as {count:number};
     expect(row.count).toBe(105);
@@ -137,5 +137,11 @@ describe('current chart capture',()=>{
  it('extracts RYM chart genres from primary and secondary genre links',()=>{
   const rymWithGenres=rymChart.replace('<span class="page_charts_section_charts_item_details_average_num">','<div class="page_charts_section_charts_item_genres_primary"><a class="genre">Post-Punk</a><a class="genre">Noise Rock</a></div><div class="page_charts_section_charts_item_genres_secondary"><a class="genre">Noise Rock</a><a class="genre">Sludge Metal</a></div><span class="page_charts_section_charts_item_details_average_num">');
   expect(parseChart('rym',rymWithGenres,rymUrl).albums[0]?.genres).toEqual(['Post-Punk','Noise Rock','Sludge Metal']);
+ });
+ it('detects localized Chinese and Turnstile-only challenges without false-positiving valid charts',()=>{
+  expect(()=>parseChart('aoty','<html><head><title>请稍候…</title></head><body><h1>请验证您是真人</h1></body></html>',aotyUrl)).toThrow(/验证/);
+  expect(()=>parseChart('aoty','<div id="turnstile-wrapper"><iframe src="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile"></iframe></div>',aotyUrl)).toThrow(/验证/);
+  expect(parseChart('aoty',aotyChart+'<div class="cf-turnstile"></div>',aotyUrl).albums).toHaveLength(1);
+  expect(()=>parseCapturedPage('rym','<title>请稍候…</title><p>正在验证您是否是真人</p>','https://rateyourmusic.com/release/album/stars/moon/')).toThrow(/验证/);
  });
 });

@@ -57,7 +57,7 @@
 /* /OD-LAYOUT-PRIMITIVES v1 */
 
 /* ==========================================================================
-   新声簿 · ALBUM RELAY — Editorial Vinyl & Listening Room Workbench
+   听点好的 · LISTEN BETTER — Editorial Vinyl & Listening Room Workbench
    Design Tokens, Swiss Grid Architecture, Vinyl Sleeve Craft & Responsive UI
    ========================================================================== */
 
@@ -330,6 +330,7 @@ button {
   font-weight: 600;
   line-height: 1.3;
   letter-spacing: 0.01em;
+  white-space: nowrap;
 }
 
 .brand-en {
@@ -339,6 +340,7 @@ button {
   letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--ink-tertiary);
+  white-space: nowrap;
 }
 
 .rail-collapse-btn {

@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { ExternalLink, LoaderCircle, MessageSquareQuote, Sparkles } from 'lucide-react';
+import { hasAlbumReviewEvidence } from '../shared/review-evidence';
 import type { Album, AlbumAiReview, ListenLinks, PlatformLink, SourceName } from '../shared/types';
 
 const SOURCE_ORIGINS: Record<SourceName, string> = {
@@ -269,7 +270,8 @@ export function AlbumAiReviewBlock({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const review = album.aiReview;
+  const review = album.aiReview?.evidenceLevel === 'full' ? album.aiReview : null;
+  const hasEvidence = hasAlbumReviewEvidence(album);
 
   if (mode === 'short') {
     if (!review?.shortReview) return null;
@@ -277,7 +279,7 @@ export function AlbumAiReviewBlock({
   }
 
   const generate = (force: boolean) => {
-    if (!request) return;
+    if (!request || !hasEvidence) return;
     setBusy(true);
     setError('');
     void request<{ review: AlbumAiReview; album: Album }>(`/albums/${encodeURIComponent(album.id)}/review`, { force })
@@ -300,7 +302,7 @@ export function AlbumAiReviewBlock({
           {review && (
             <>
               <span className="model-pill">{review.model}</span>
-              <span className="model-pill">{review.evidenceLevel === 'full' ? '含原页乐评' : '仅凭评分推演'}</span>
+              <span className="model-pill">基于原页乐评</span>
             </>
           )}
         </div>
@@ -309,7 +311,8 @@ export function AlbumAiReviewBlock({
           <button
             type="button"
             className="btn btn-secondary btn-sm"
-            disabled={busy || (!aiEnabled && !review)}
+            disabled={busy || !hasEvidence || (!aiEnabled && !review)}
+            title={!hasEvidence ? '待 Chrome 扩展补抓原页乐评或描述词后方可生成' : undefined}
             onClick={() => generate(Boolean(review))}
           >
             {busy ? <LoaderCircle size={12} className="spin" /> : <Sparkles size={12} />}
@@ -326,9 +329,11 @@ export function AlbumAiReviewBlock({
 
       {!review ? (
         <p className="field-hint" style={{ fontSize: 'var(--text-xs)' }}>
-          {aiEnabled
-            ? '点击「生成乐评」，按唱片档案卡格式提炼听感、风格坐标与口碑拆解。'
-            : '在「设置 → AI 与高级」启用模型后可生成中文乐评。'}
+          {!hasEvidence
+            ? '待补抓原页乐评：为避免模型编造，需等 Chrome 扩展补抓该专辑的 RYM / AOTY / Pitchfork 详情页后自动提炼。'
+            : aiEnabled
+              ? '已采集原页乐评素材，点击「生成乐评」基于原页内容提炼唱片档案卡。'
+              : '在「设置 → AI 与高级」启用模型后，可基于原页乐评素材生成中文档案卡。'}
         </p>
       ) : (
         <>

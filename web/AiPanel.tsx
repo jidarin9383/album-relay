@@ -249,12 +249,27 @@ export function AiPanel({ request, onSaved }: Props) {
     setError('');
     setNotice('');
     try {
-      const res = await request<{ queuedCount: number; totalSelected: number }>('/ai/reviews/generate-selected', {});
-      setNotice(
-        res.queuedCount
-          ? `已加入后台补全队列（${res.queuedCount} 张专辑），当前引擎「${savedSettings?.model}」。`
-          : `全部 ${res.totalSelected} 张入选专辑已有最新乐评。`
-      );
+      const res = await request<{
+        queuedCount: number;
+        totalSelected: number;
+        eligibleCount?: number;
+        skippedNoEvidenceCount?: number;
+      }>('/ai/reviews/generate-selected', {});
+      const eligible = res.eligibleCount ?? res.totalSelected;
+      const skipped = res.skippedNoEvidenceCount ?? 0;
+      if (res.queuedCount > 0) {
+        setNotice(
+          `已加入后台生成（${res.queuedCount} 张含原页乐评的专辑），使用「${savedSettings?.model}」${skipped ? `；另有 ${skipped} 张待扩展补抓详情页后自动生成` : ''}。`
+        );
+      } else if (eligible === 0 && res.totalSelected > 0) {
+        setNotice(
+          `当前 ${res.totalSelected} 张入选专辑均尚未抓到原页乐评，已跳过生成（避免编造）；待 Chrome 扩展补抓详情页后会自动生成。`
+        );
+      } else {
+        setNotice(
+          `已采集原页乐评的 ${eligible} 张入选专辑均有最新乐评${skipped ? `（另有 ${skipped} 张待扩展补抓详情页）` : ''}。`
+        );
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : '批量补全失败');
     } finally {
@@ -512,7 +527,7 @@ export function AiPanel({ request, onSaved }: Props) {
         <label className="ai-auto-row" htmlFor="ai-auto-review-toggle">
           <span className="ai-auto-copy">
             <span className="ai-auto-title">新专辑入选后自动生成乐评</span>
-            <span className="ai-auto-desc">每轮新碟入选后自动补充唱片档案短评</span>
+            <span className="ai-auto-desc">仅在扩展补抓到原页乐评或描述词后自动提炼，绝不凭空编造</span>
           </span>
           <input
             id="ai-auto-review-toggle"

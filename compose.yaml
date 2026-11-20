@@ -1,13 +1,13 @@
 services:
-  album-relay:
+  listen-better:
     build: .
     ports:
       - "3210:3210"
     environment:
-      ALBUM_RELAY_DATA_DIR: /data
+      LISTEN_BETTER_DATA_DIR: /data
       TRUST_PROXY: "${TRUST_PROXY:-false}"
     volumes:
-      - album-data:/data
+      - listen-better-data:/data
     restart: unless-stopped
 volumes:
-  album-data:
+  listen-better-data:

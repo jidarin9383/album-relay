@@ -128,7 +128,7 @@ export interface ConnectionStatus { configured: boolean; loggedIn: boolean; mess
 export interface Overview { albums: number; selected: number; pending: number; disagreements: number; playlists: Playlist[]; lastRun: Run | null; nextRun: string | null; sourceStatuses: SourceStatus[]; connection: ConnectionStatus }
 export interface ChartCapture { source: SourceName; pageUrl: string; observedAt: string; albums: Album[]; warnings: string[]; conflicts?: Album[] }
 export interface CaptureReceipt extends ChartCapture { id: string; added: number; updated: number }
-/** Scheduled refresh performed by the user's own Chrome via the Album Relay extension. `{year}` expands to the current year. */
+/** Scheduled refresh performed by the user's own Chrome via the Listen Better extension. `{year}` expands to the current year. */
 export interface ExtensionRefresh {
   enabled: boolean;
   hour: number;

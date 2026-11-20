@@ -1,10 +1,10 @@
 # Assisted chart and release capture
 
-Album Relay saves ratings from an already-open RYM, AOTY, or Pitchfork page into its private album library through the paired Chrome extension (`extension/`). It supports annual RYM/AOTY chart pages, single RYM/AOTY album pages, Pitchfork review list pages (`/reviews/albums/`, `/reviews/best/albums/`), individual Pitchfork album review pages, and name-based browser search links without paid scraping APIs or manual score entry.
+Listen Better saves ratings from an already-open RYM, AOTY, or Pitchfork page into its private album library through the paired Chrome extension (`extension/`). It supports annual RYM/AOTY chart pages, single RYM/AOTY album pages, Pitchfork review list pages (`/reviews/albums/`, `/reviews/best/albums/`), individual Pitchfork album review pages, and name-based browser search links without paid scraping APIs or manual score entry.
 
 ## Use
 
-1. Install and pair the Chrome extension (`extension/README.md`), then open **设置 → 连接与同步** in Album Relay.
+1. Install and pair the Chrome extension (`extension/README.md`), then open **设置 → 连接与同步** in Listen Better.
 2. Open a supported page in your everyday Chrome. You can use the **Open this year's chart / Latest reviews / Best New** or **Search RYM / AOTY / Pitchfork** links in the capture panel; they open new tabs. Supported pages are RYM album charts and release pages, AOTY user-score charts and album pages, and Pitchfork album review lists or single reviews. Complete any human check yourself.
 3. Once the page has loaded, the extension submits it. The toolbar badge shows `✓` (captured, or already captured within 30 minutes), `!` (verification needed) or `✗` (failed). Chart and Pitchfork review-list captures read at most 60 rows from the open page without following links.
 4. If a captured record differs slightly in release date or edition from an existing album, review it under **Capture history** and click **Confirm merge** (`确认合并`) only after confirming both refer to the same release.

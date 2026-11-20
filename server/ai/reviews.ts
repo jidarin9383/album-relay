@@ -1,14 +1,17 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { hasAlbumReviewEvidence } from '../../shared/review-evidence.js';
 import type { Album, AlbumAiReview } from '../../shared/types.js';
 import type { Store } from '../store.js';
 import { getAiApiKey, getAiSettings, type LlmClient } from './client.js';
 
-const REVIEW_PROMPT_VERSION = 'v2-dossier-a';
+export { hasAlbumReviewEvidence };
+
+const REVIEW_PROMPT_VERSION = 'v3-evidence-only';
 
 const reviewOutputSchema = z.object({
   shortReview: z.string().trim().min(12).max(160),
-  longReview: z.string().trim().min(60).max(1400),
+  longReview: z.string().trim().min(40).max(1400),
   audienceSummary: z.string().trim().max(200).optional(),
   criticSummary: z.string().trim().max(200).optional()
 });
@@ -66,8 +69,15 @@ function rowToReview(row: ReviewRow): AlbumAiReview {
   };
 }
 
+export function purgeSpeculativeAiReviews(store: Store): number {
+  const result = store.database.prepare("DELETE FROM album_reviews_ai WHERE evidence_level != 'full'").run();
+  return Number(result.changes ?? 0);
+}
+
 export function readAiReviewsMap(store: Store): Map<string, AlbumAiReview> {
-  const rows = store.database.prepare('SELECT * FROM album_reviews_ai').all() as unknown as ReviewRow[];
+  const rows = store.database
+    .prepare("SELECT * FROM album_reviews_ai WHERE evidence_level = 'full'")
+    .all() as unknown as ReviewRow[];
   const map = new Map<string, AlbumAiReview>();
   for (const r of rows) map.set(r.album_id, rowToReview(r));
   return map;
@@ -75,7 +85,7 @@ export function readAiReviewsMap(store: Store): Map<string, AlbumAiReview> {
 
 export function getAiReview(store: Store, albumId: string): AlbumAiReview | null {
   const row = store.database
-    .prepare('SELECT * FROM album_reviews_ai WHERE album_id = ?')
+    .prepare("SELECT * FROM album_reviews_ai WHERE album_id = ? AND evidence_level = 'full'")
     .get(albumId) as ReviewRow | undefined;
   return row ? rowToReview(row) : null;
 }
@@ -145,8 +155,8 @@ function buildReviewEvidencePacket(album: Album) {
 }
 
 /**
- * Generates and caches a short + long bilingual-evidence-grounded AI review for an album.
- * Never invents missing quotes or scores when `evidenceLevel === 'scores_only'`.
+ * Generates and caches a bilingual-evidence-grounded AI review for an album.
+ * Strictly refuses generation when no original-page review evidence has been captured yet.
  */
 export async function generateAlbumAiReview(
   store: Store,
@@ -158,6 +168,11 @@ export async function generateAlbumAiReview(
   if (!settings.enabled) {
     throw new Error('请先在「设置 → AI 与高级」中启用并配置大模型');
   }
+  if (!hasAlbumReviewEvidence(album)) {
+    throw new Error(
+      '暂无原页乐评素材：为避免模型编造，需等浏览器扩展补抓该专辑的 RYM / AOTY / Pitchfork 详情页（含评论摘录、描述词或媒体导语）后再生成 AI 乐评。'
+    );
+  }
 
   const evidenceHash = computeAlbumEvidenceHash(album);
   if (!options.force) {
@@ -167,32 +182,27 @@ export async function generateAlbumAiReview(
     }
   }
 
-  const hasDetailEvidence = album.sources.some(
-    (s) => Boolean(s.detailCaptured) || Boolean(s.editorialSummary?.trim()) || Boolean(s.reviewSnippets?.length)
-  );
-  const evidenceLevel: 'full' | 'scores_only' = hasDetailEvidence ? 'full' : 'scores_only';
+  const evidenceLevel: 'full' = 'full';
   const packet = buildReviewEvidencePacket(album);
 
   const system = [
-    '你是一位资深独立音乐档案编辑，专写给挑剔老乐迷看的高密度唱片档案笔记，克制、精准、言之有物。',
-    '请仅依据用户提供的专辑元数据、大众评分/短评、媒体评分/乐评摘录（可结合你对艺人及所列流派的真实音乐美学认知）输出严格 JSON 对象，不要附加任何解释文字。',
-    '严守以下写作纪律：',
-    '1. 禁止车轱辘话与跨字段重复：shortReview 与 longReview 内禁止照抄 UI 已展示的原始分数或网站名（如不要写“RYM 3.83、Pitchfork 8.3”）；audienceSummary 与 criticSummary 不得与 shortReview 措辞雷同。',
-    '2. 评分标尺准确校准：RYM >= 3.70 或 AOTY >= 80（尤其投票数百至数千人以上）已属公开高分共识，RYM >= 3.90 或 AOTY >= 85 属年度尖货，Pitchfork >= 8.0 或 BNM 属媒体高度推崇；严禁将上述高分误判为「分数中庸」「大众接受度不高」。',
-    '3. 禁止虚构与脑补：严禁捏造未在证据中出现的曲目名、制作人、合作嘉宾或原话引语；未抓取详情摘录（evidenceLevel="scores_only"）时，严禁无中生有猜测具体未列出的乐器配置。',
+    '你是一位资深独立音乐档案编辑，负责将采集到的海外原站乐评与听众反馈高密度提炼成中文唱片档案笔记，克制、精准、言之有物。',
+    '请严格且仅依据用户 JSON 输入中的专辑元数据、原页描述词（descriptors）、大众评分/评论摘录（audienceReception）、媒体评分/导语/评论摘录（criticReception）输出严格 JSON 对象，不要附加任何解释文字。',
+    '严守以下零编造写作纪律：',
+    '1. 绝对禁止脑补与调用外部印象：严禁使用模型自身记忆或流派刻板印象脑补任何未在输入素材中明确提及的声音质感、具体乐器、制作手法、曲目名、制作人、合作嘉宾、发行故事或原话引语；输入里没写到的信息一概不得写入。',
+    '2. 禁止车轱辘话与跨字段重复：shortReview 与 longReview 内禁止照抄 UI 已展示的原始分数或网站名（如不要写“RYM 3.83、Pitchfork 8.3”）；audienceSummary 与 criticSummary 不得与 shortReview 措辞雷同。',
+    '3. 评分标尺准确校准：RYM >= 3.70 或 AOTY >= 80（尤其投票数百至数千人以上）已属公开高分共识，RYM >= 3.90 或 AOTY >= 85 属年度尖货，Pitchfork >= 8.0 或 BNM 属媒体高度推崇；严禁将上述高分误判为「分数中庸」「大众接受度不高」。',
     '4. 禁止空洞套话：严禁出现“值得整张聆听”“适合深夜佩戴耳机”“带来全新听觉体验”“令人耳目一新”“点开原网站详情页”等任何水词或系统提示。',
     'JSON 字段结构（唱片档案卡）：',
-    '- shortReview: 24–42 字中文一句话抓手，直点核心声音特质与创作野心（不得含分数、站名或套话）。',
-    '- longReview: 160–280 字中文档案，必须用空行（\\n\\n）严格分成以下 4 个带方括号标题的小节：',
-    '  【声音质地】点明音色肌理、节奏骨架与制作取向（不空泛夸赞）。',
-    '  【风格坐标】点出该作在流派谱系或艺人创作线上的具体落点与辨识度。',
-    '  【口碑拆解】解读大众投票规模/倾向与媒体评价之间的共识或温差原因（不复述数字）。',
-    '  【适听与劝退】明确指出最击中哪类审美偏好，以及可能劝退的具体听感门槛。',
-    '- audienceSummary: 12–38 字概括 RYM/AOTY 乐迷口碑定调与主要共鸣点。',
-    '- criticSummary: 12–38 字概括媒体态度；若输入中无任何媒体评分/Pitchfork 时诚实写「暂无媒体评分，当前由核心乐迷高分推高」。',
-    evidenceLevel === 'scores_only'
-      ? '当前证据级别为 scores_only（仅评分与流派标签，尚未抓取详情页评论原文）：请紧扣已有流派、艺人谱系与口碑温差作深层拆解，绝不编造曲名、乐评原话或未提及的乐器细节。'
-      : '当前证据级别为 full（含原页描述词、媒体导语或评论摘录）：请充分吸收并忠实转述其中的核心观点与争议细节。'
+    '- shortReview: 16–42 字中文一句话提炼，必须直接概括输入摘录或描述词里的核心评价点（不得含分数、站名、脑补词汇或套话）。',
+    '- longReview: 中文档案笔记（用空行 \\n\\n 分节），可从以下 4 个带方括号标题中选用有输入素材支撑的小节；**若某个小节在输入素材中缺乏具体依据，直接省略该小节，绝不允许硬凑或靠猜补齐**：',
+    '  【声音质地】仅提炼原页描述词或乐评原文里明确写出的音色、节奏、人声与编配特征。',
+    '  【风格坐标】仅结合输入流派、描述词与原文对创作定位的讨论做概括。',
+    '  【口碑拆解】解读大众评分与媒体评价之间的共识点、关注焦点或分歧所在（不复述数字）。',
+    '  【适听与劝退】仅提炼原文或受众反馈中明确提到的偏爱理由或听感门槛。',
+    '- audienceSummary: 12–38 字概括输入中 RYM/AOTY 乐迷评语或评分反映的核心反馈；若无听众评论且仅大众高分共识则如实写清「核心乐迷高分认可，暂无具体听众短评摘录」。',
+    '- criticSummary: 12–38 字概括输入中 Pitchfork/媒体导语与乐评摘录态度；若输入中无任何媒体评分/导语时诚实写「暂无媒体评分与乐评摘录」。',
+    '再次强调：宁可简短诚实，绝不为了篇幅流畅而编造任何输入中不存在的听感判断。'
   ].join('\n');
 
   const parsed = await client.completeJson({
@@ -247,6 +257,13 @@ export async function generateAlbumAiReview(
   return review;
 }
 
+export interface ReviewEnqueueResult {
+  queuedCount: number;
+  totalSelected: number;
+  eligibleCount: number;
+  skippedNoEvidenceCount: number;
+}
+
 /** Serialized background queue for generating album reviews one at a time without blocking HTTP responses. */
 export class ReviewQueue {
   private pendingIds: string[] = [];
@@ -254,12 +271,13 @@ export class ReviewQueue {
   private closed = false;
   private activePromise: Promise<void> | null = null;
 
-  enqueueSelected(store: Store, client: LlmClient): { queuedCount: number; totalSelected: number } {
-    if (this.closed) return { queuedCount: 0, totalSelected: 0 };
+  enqueueSelected(store: Store, client: LlmClient): ReviewEnqueueResult {
+    if (this.closed) return { queuedCount: 0, totalSelected: 0, eligibleCount: 0, skippedNoEvidenceCount: 0 };
     const existingReviews = readAiReviewsMap(store);
     const selected = store.albums().filter((a) => !a.excluded && a.decision?.status === 'selected');
+    const eligible = selected.filter(hasAlbumReviewEvidence);
     let queuedCount = 0;
-    for (const album of selected) {
+    for (const album of eligible) {
       const cached = existingReviews.get(album.id);
       const hash = computeAlbumEvidenceHash(album);
       if (cached && cached.evidenceHash === hash) continue;
@@ -269,7 +287,12 @@ export class ReviewQueue {
       }
     }
     this.kick(store, client);
-    return { queuedCount, totalSelected: selected.length };
+    return {
+      queuedCount,
+      totalSelected: selected.length,
+      eligibleCount: eligible.length,
+      skippedNoEvidenceCount: selected.length - eligible.length
+    };
   }
 
   private kick(store: Store, client: LlmClient): void {
@@ -280,7 +303,7 @@ export class ReviewQueue {
         while (!this.closed && this.pendingIds.length) {
           const nextId = this.pendingIds.shift()!;
           const album = store.albums().find((a) => a.id === nextId);
-          if (!album) continue;
+          if (!album || !hasAlbumReviewEvidence(album)) continue;
           try {
             await generateAlbumAiReview(store, album, client);
           } catch {

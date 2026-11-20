@@ -13,12 +13,23 @@ function canonical(value:string, origin:string, pattern:RegExp, pageParam?:strin
  return url.href;
 }
 const clean=(value:string)=>value.replace(/\s+/g,' ').trim();
+const INTERSTITIAL_SELECTOR = '#challenge-form, #challenge-running, #cf-challenge-running, #challenge-stage, .cf-browser-verification, #challenge-error-text, #challenge-body-text, #cf-wrapper';
+const TURNSTILE_SELECTOR = '#turnstile-wrapper, .cf-turnstile, iframe[src*="challenges.cloudflare.com"], input[name="cf-turnstile-response"]';
+const CHALLENGE_ERROR = '当前页面仍需要验证，请在独立浏览器中完成后再收录';
+function assertNotChallenge($: ReturnType<typeof load>): void {
+ if ($(INTERSTITIAL_SELECTOR).length > 0 || isChallenge($.root().text(), 200)) {
+  throw new CaptureError(CHALLENGE_ERROR);
+ }
+}
+function hasTurnstileWidget($: ReturnType<typeof load>): boolean {
+ return $(TURNSTILE_SELECTOR).length > 0;
+}
 /** Parse only the current public chart document, never fetch linked pages. */
 export function parseChart(source:'rym'|'aoty',html:string,pageUrl:string):ChartCapture {
  const origin=origins[source];
  const page=canonical(pageUrl,origin,source==='rym'?/^\/charts\/(top|popular|esoteric)\/album\//:/^\/ratings\/user-highest-rated\//,source==='aoty'?'p':undefined);
  const $=load(html);$('script,style,noscript').remove();
- if(isChallenge($.root().text(),200))throw new CaptureError('当前页面仍需要验证，请在独立浏览器中完成后再收录');
+ assertNotChallenge($);
  const localeText=(node:ReturnType<typeof $>)=>clean(node.find('.ui_name_locale_original').first().text()||node.find('.ui_name_locale').first().text()||node.text());
  const observedAt=new Date().toISOString(),warnings:string[]=[],records=new Map<string,Album>();
  const rows=$(source==='rym'?'.page_charts_section_charts_item.object_release':'.albumListRow').toArray();
@@ -62,7 +73,10 @@ export function parseChart(source:'rym'|'aoty',html:string,pageUrl:string):Chart
    records.set(url,{id:albumId(artist,title),artist,title,releaseDate:parseReleaseDate(released),format,...(coverUrl?{coverUrl}:{}),genres,...(descriptors.length?{descriptors}:{}),...(capturedLinks?{capturedLinks}:{}),excluded:false,sources:[{source,url,score,scale,votes,votesDisplay,votesApproximate,observedAt,status:'ok',collectionMethod:'browser-capture',sourcePageUrl:page,...(descriptors.length?{descriptors}:{})}]});
   }catch{warnings.push('一个条目无法可靠识别，已跳过；可打开专辑页核对身份与格式');}
  }
- if(!records.size)throw new CaptureError('未找到可收录的用户评分榜单。请打开 RYM 专辑榜或 AOTY 用户评分榜后重试');
+ if(!records.size){
+  if(hasTurnstileWidget($))throw new CaptureError(CHALLENGE_ERROR);
+  throw new CaptureError('未找到可收录的用户评分榜单。请打开 RYM 专辑榜或 AOTY 用户评分榜后重试');
+ }
  return {source,pageUrl:page,observedAt,albums:[...records.values()],warnings};
 }
 
@@ -77,9 +91,12 @@ export function parseCapturedPage(source:SourceName,html:string,pageUrl:string):
   if(/^\/charts\/(top|popular|esoteric)\/album\//.test(url.pathname))return parseChart('rym',html,pageUrl);
   const canonicalUrl=canonical(pageUrl,origin,/^\/release\/(?:album|ep|comp|single|mixtape|unauth|video|djmix|additional)\/[^/]+\/[^/]+\/?$/);
   const $=load(html);$('script,style,noscript').remove();
-  if(isChallenge($.root().text(),200))throw new CaptureError('当前页面仍需要验证，请在独立浏览器中完成后再收录');
+  assertNotChallenge($);
   const album=parseRym(html,canonicalUrl);
-  if(!album||album.sources[0]?.score===null)throw new CaptureError('当前专辑页未识别到有效评分，请确认页面加载完成后重试');
+  if(!album||album.sources[0]?.score===null){
+   if(hasTurnstileWidget($))throw new CaptureError(CHALLENGE_ERROR);
+   throw new CaptureError('当前专辑页未识别到有效评分，请确认页面加载完成后重试');
+  }
   const observedAt=new Date().toISOString();
   album.sources[0]={...album.sources[0]!,observedAt,collectionMethod:'browser-capture',sourcePageUrl:canonicalUrl};
   return {source,pageUrl:canonicalUrl,observedAt,albums:[album],warnings:[]};
@@ -88,9 +105,12 @@ export function parseCapturedPage(source:SourceName,html:string,pageUrl:string):
   if(/^\/ratings\/user-highest-rated\//.test(url.pathname))return parseChart('aoty',html,pageUrl);
   const canonicalUrl=canonical(pageUrl,origin,/^\/album\/\d+[^/]*\.php$/);
   const $=load(html);$('script,style,noscript').remove();
-  if(isChallenge($.root().text(),200))throw new CaptureError('当前页面仍需要验证，请在独立浏览器中完成后再收录');
+  assertNotChallenge($);
   const album=parseAoty(html,canonicalUrl);
-  if(!album||album.sources[0]?.score===null)throw new CaptureError('当前专辑页未识别到有效用户评分，请确认页面加载完成后重试');
+  if(!album||album.sources[0]?.score===null){
+   if(hasTurnstileWidget($))throw new CaptureError(CHALLENGE_ERROR);
+   throw new CaptureError('当前专辑页未识别到有效用户评分，请确认页面加载完成后重试');
+  }
   const observedAt=new Date().toISOString();
   album.sources[0]={...album.sources[0]!,observedAt,collectionMethod:'browser-capture',sourcePageUrl:canonicalUrl};
   return {source,pageUrl:canonicalUrl,observedAt,albums:[album],warnings:[]};
@@ -98,16 +118,22 @@ export function parseCapturedPage(source:SourceName,html:string,pageUrl:string):
  if(/^\/reviews\/(?:best\/)?albums\/?$/.test(url.pathname)){
   const canonicalUrl=canonical(pageUrl,origin,/^\/reviews\/(?:best\/)?albums\/?$/,'page');
   const $=load(html);$('script,style,noscript').remove();
-  if(isChallenge($.root().text(),200))throw new CaptureError('当前页面仍需要验证，请在独立浏览器中完成后再收录');
+  assertNotChallenge($);
   const {albums,warnings}=parsePitchforkIndex(html,canonicalUrl);
-  if(!albums.length)throw new CaptureError('当前 Pitchfork 列表页未识别到有效专辑评分，请确认页面加载完成后重试');
+  if(!albums.length){
+   if(hasTurnstileWidget($))throw new CaptureError(CHALLENGE_ERROR);
+   throw new CaptureError('当前 Pitchfork 列表页未识别到有效专辑评分，请确认页面加载完成后重试');
+  }
   return {source,pageUrl:canonicalUrl,observedAt:albums[0]?.sources[0]?.observedAt??new Date().toISOString(),albums,warnings};
  }
  const canonicalUrl=canonical(pageUrl,origin,/^\/reviews\/albums\/[^/]+\/?$/);
  const $=load(html);$('script,style,noscript').remove();
- if(isChallenge($.root().text(),200))throw new CaptureError('当前页面仍需要验证，请在独立浏览器中完成后再收录');
+ assertNotChallenge($);
  const album=parsePitchfork(html,canonicalUrl);
- if(!album||album.sources[0]?.score===null)throw new CaptureError('当前乐评页未识别到有效评分，请确认页面加载完成后重试');
+ if(!album||album.sources[0]?.score===null){
+  if(hasTurnstileWidget($))throw new CaptureError(CHALLENGE_ERROR);
+  throw new CaptureError('当前乐评页未识别到有效评分，请确认页面加载完成后重试');
+ }
  const observedAt=new Date().toISOString();
  album.sources[0]={...album.sources[0]!,observedAt,collectionMethod:'browser-capture',sourcePageUrl:canonicalUrl};
  return {source,pageUrl:canonicalUrl,observedAt,albums:[album],warnings:[]};

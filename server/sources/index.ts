@@ -22,7 +22,7 @@ export class SourceService {
   if(new URL(url).origin!==origins[source])throw new Error('Refusing a source URL outside its canonical origin');
   if(this.blocked.has(source))throw new Blocked(`${source}: blocked; complete verification before retrying`);
   const wait=Math.max(1200,settings.requestDelayMs)-(Date.now()-(this.last.get(source)??0));if(wait>0)await new Promise(r=>setTimeout(r,wait));this.last.set(source,Date.now());
-  const response=await fetch(url,{headers:{'User-Agent':'AlbumRelay/0.1 (+self-hosted personal album discovery)','Accept':'text/html'},signal:AbortSignal.timeout(25000),redirect:'follow'});
+  const response=await fetch(url,{headers:{'User-Agent':'ListenBetter/0.1 (+self-hosted personal album curation)','Accept':'text/html'},signal:AbortSignal.timeout(25000),redirect:'follow'});
   const status=response.status,html=await response.text();
   if(isChallenge(html,status)){this.blocked.add(source);throw new Blocked(`${source}: HTTP ${status} or verification challenge; site chain stopped`);}
   if(status>=400)throw new Error(`${source}: HTTP ${status}`);

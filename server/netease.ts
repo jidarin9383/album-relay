@@ -26,13 +26,13 @@ export class NeteaseClient {
     if(this.options.useDesktopAccount || this.options.command) return;
     this.setup ??= (async()=>{
       await mkdir(path.join(this.dataDir,'account'),{recursive:true,mode:0o700});
-      await writeFile(path.join(this.dataDir,'account-home.cjs'),"const os=require('node:os'); const p=process.env.ALBUM_RELAY_ACCOUNT_HOME; if(!p)throw new Error('Missing account home');os.homedir=()=>p;\n",{mode:0o600});
+      await writeFile(path.join(this.dataDir,'account-home.cjs'),"const os=require('node:os'); const p=process.env.LISTEN_BETTER_ACCOUNT_HOME || process.env.ALBUM_RELAY_ACCOUNT_HOME; if(!p)throw new Error('Missing account home');os.homedir=()=>p;\n",{mode:0o600});
     })(); await this.setup;
   }
   private async spawnCommand(args:readonly string[]):Promise<unknown> {
     await this.initialize();
     const env={...process.env};
-    if(!this.options.useDesktopAccount) {env.ALBUM_RELAY_ACCOUNT_HOME=path.resolve(this.dataDir,'account');env.NODE_OPTIONS=`${env.NODE_OPTIONS ?? ''} --require ${JSON.stringify(path.resolve(this.dataDir,'account-home.cjs'))}`.trim();}
+    if(!this.options.useDesktopAccount) {env.LISTEN_BETTER_ACCOUNT_HOME=path.resolve(this.dataDir,'account');env.NODE_OPTIONS=`${env.NODE_OPTIONS ?? ''} --require ${JSON.stringify(path.resolve(this.dataDir,'account-home.cjs'))}`.trim();}
     return new Promise((resolve,reject)=>{
       const child=spawn(this.options.executable ?? 'ncm-cli',[...args],{shell:false,env,stdio:['ignore','pipe','pipe'],detached:process.platform!=='win32'});
       this.children.add(child);let output='';let bytes=0;let settled=false;

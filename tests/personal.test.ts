@@ -360,7 +360,7 @@ describe('personal taste database, imports, feedback and 7+3 discovery', () => {
       const targetId = candidates[1]!.id;
       await app.inject({ method: 'POST', url: `/api/albums/${targetId}/status`, headers: { cookie }, payload: { listeningStatus: 'liked' } });
       await app.inject({ method: 'POST', url: `/api/albums/${targetId}/status`, headers: { cookie }, payload: { listeningStatus: 'skipped', reaction: 'disliked' } });
-      const checkDb = new DatabaseSync(join(dir, 'album-relay.sqlite'), { readOnly: true });
+      const checkDb = new DatabaseSync(join(dir, 'listen-better.sqlite'), { readOnly: true });
       const feedbackRows = checkDb.prepare('SELECT reaction FROM preference_signals WHERE candidate_id = ? ORDER BY rowid ASC').all(targetId) as { reaction: string }[];
       expect(feedbackRows.map((r) => r.reaction)).toEqual(['liked', 'disliked']);
       checkDb.close();

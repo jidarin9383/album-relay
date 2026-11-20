@@ -17,5 +17,5 @@ export function importRegistry(store:Store,value:unknown,apply:boolean):{playlis
  return {playlists:playlists.length,albums:playlists.reduce((sum,p)=>sum+p.albumIds.length,0)};}finally{store.releaseLock(owner);}
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
- const file=process.argv[2];if(!file){console.error('Usage: import <registry.json> [--apply]');process.exitCode=1;}else {const store=new Store(resolve(process.env.ALBUM_RELAY_DATA_DIR??'./data'));try{const result=importRegistry(store,JSON.parse(readFileSync(resolve(file),'utf8')),process.argv.includes('--apply'));console.log(JSON.stringify({...result,applied:process.argv.includes('--apply')}));}finally{store.close();}}
+ const file=process.argv[2];if(!file){console.error('Usage: import <registry.json> [--apply]');process.exitCode=1;}else {const store=new Store(resolve(process.env.LISTEN_BETTER_DATA_DIR??process.env.ALBUM_RELAY_DATA_DIR??'./data'));try{const result=importRegistry(store,JSON.parse(readFileSync(resolve(file),'utf8')),process.argv.includes('--apply'));console.log(JSON.stringify({...result,applied:process.argv.includes('--apply')}));}finally{store.close();}}
 }

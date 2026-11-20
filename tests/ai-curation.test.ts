@@ -215,7 +215,7 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
     }
   });
 
-  it('caches AI short/long reviews by evidenceHash, distinguishes scores_only vs full, and regenerates when detail snippets arrive', async () => {
+  it('refuses scores-only fabrication, purges legacy scores_only rows on startup, and caches full evidence-backed reviews', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'relay-ai-reviews-'));
     const alb = makeAlbum('Soft Halo', 'Glass Garden', ['Dream Pop'], {
       aotyCritic: 89,
@@ -225,6 +225,24 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
     });
     const seed = new Store(dir);
     seed.saveAlbums([alb]);
+    seed.database
+      .prepare(
+        `INSERT INTO album_reviews_ai(
+          album_id, evidence_hash, evidence_level, short_review, long_review,
+          audience_summary, critic_summary, model, generated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        alb.id,
+        'legacy-hash',
+        'scores_only',
+        '旧版凭评分猜写的短评',
+        '旧版凭评分猜写的长评内容，用于验证启动时清理机制。',
+        null,
+        null,
+        'qwen2.5:7b',
+        new Date().toISOString()
+      );
     seed.close();
 
     let callCount = 0;
@@ -236,13 +254,10 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
       async completeJson<T>(req: LlmJsonRequest<T>): Promise<T> {
         callCount++;
         lastSystemPrompt = req.system;
-        const payload = JSON.parse(req.user) as { evidenceLevel: string };
         return req.schema.parse({
-          shortReview: payload.evidenceLevel === 'full' ? '雾面吉他墙包裹下的冷调合成器叙事，张力内敛。' : '极简器乐与冷峻人声搭建出的梦幻流行声景。',
+          shortReview: '雾面吉他墙包裹下的冷调合成器叙事，张力内敛。',
           longReview:
-            payload.evidenceLevel === 'full'
-              ? '【声音质地】混响吉他与合成器形成绵密雾面。\n\n【风格坐标】延续自赏与梦幻流派细腻声场。\n\n【口碑拆解】媒体与乐迷一致推崇其音色统一性。\n\n【适听与劝退】适合偏好缓慢沉浸质感，节奏密度偏轻。'
-              : '【声音质地】以清澈器乐与朦胧混响构筑空间感。\n\n【风格坐标】锚定梦幻流行核心语法。\n\n【口碑拆解】大众高票与媒体定调共振度极高。\n\n【适听与劝退】追求强鼓点驱动者可能会觉得整体偏缓。',
+            '【声音质地】混响吉他与合成器形成绵密雾面。\n\n【口碑拆解】媒体与乐迷一致推崇其音色统一性。',
           audienceSummary: 'RYM 与 AOTY 听众普遍认可其声景完成度。',
           criticSummary: '媒体高度推崇其声音统一性与制作细腻度。'
         });
@@ -253,6 +268,11 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
     try {
       const setup = await app.inject({ method: 'POST', url: '/api/setup', payload: { password: 'ai-review-password' } });
       const cookie = setup.headers['set-cookie'] as string;
+
+      // Legacy scores_only review was purged on startup
+      const albumsBefore = await app.inject({ url: '/api/albums', headers: { cookie } });
+      expect(albumsBefore.statusCode).toBe(200);
+      expect(albumsBefore.json()[0].aiReview).toBeNull();
 
       await app.inject({
         method: 'PUT',
@@ -267,22 +287,18 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
         }
       });
 
-      // 1. First generation (scores_only) using Format A dossier prompt & calibrated thresholds
-      const first = await app.inject({ method: 'POST', url: `/api/albums/${alb.id}/review`, headers: { cookie }, payload: {} });
-      expect(first.statusCode).toBe(200);
-      expect(first.json().review.evidenceLevel).toBe('scores_only');
-      expect(callCount).toBe(1);
-      expect(lastSystemPrompt).toContain('【声音质地】');
-      expect(lastSystemPrompt).toContain('【适听与劝退】');
-      expect(lastSystemPrompt).toContain('RYM >= 3.70');
-      expect(lastSystemPrompt).not.toContain('自动抓取媒体与大众评论原文并丰富本篇长评');
+      // 1. Without original-page evidence, single & batch generation strictly refuse to fabricate
+      const blocked = await app.inject({ method: 'POST', url: `/api/albums/${alb.id}/review`, headers: { cookie }, payload: {} });
+      expect(blocked.statusCode).toBe(400);
+      expect(blocked.json().error).toContain('暂无原页乐评素材');
+      expect(callCount).toBe(0);
 
-      // 2. Second request with unchanged evidence -> hits SQLite cache
-      const cached = await app.inject({ method: 'POST', url: `/api/albums/${alb.id}/review`, headers: { cookie }, payload: {} });
-      expect(cached.statusCode).toBe(200);
-      expect(callCount).toBe(1);
+      const batchBlocked = await app.inject({ method: 'POST', url: '/api/ai/reviews/generate-selected', headers: { cookie }, payload: {} });
+      expect(batchBlocked.statusCode).toBe(200);
+      expect(batchBlocked.json()).toEqual({ queuedCount: 0, totalSelected: 1, eligibleCount: 0, skippedNoEvidenceCount: 1 });
+      expect(callCount).toBe(0);
 
-      // 3. New detail page evidence arrives via extension capture -> hash changes -> regenerates as 'full'
+      // 2. Detail page evidence arrives via extension capture -> allowed & strictly evidence-grounded
       const token = (await app.inject({ method: 'POST', url: '/api/extension/token', headers: { cookie } })).json().token as string;
       const aotyDetailHtml = `
         <div class="artist">Soft Halo</div>
@@ -300,9 +316,36 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
       });
       expect(capRes.statusCode).toBe(200);
 
-      const refreshed = await app.inject({ method: 'POST', url: `/api/albums/${alb.id}/review`, headers: { cookie }, payload: {} });
-      expect(refreshed.statusCode).toBe(200);
-      expect(refreshed.json().review.evidenceLevel).toBe('full');
+      const generated = await app.inject({ method: 'POST', url: `/api/albums/${alb.id}/review`, headers: { cookie }, payload: {} });
+      expect(generated.statusCode).toBe(200);
+      expect(generated.json().review.evidenceLevel).toBe('full');
+      expect(callCount).toBe(1);
+      expect(lastSystemPrompt).toContain('绝对禁止脑补与调用外部印象');
+      expect(lastSystemPrompt).toContain('直接省略该小节');
+      expect(lastSystemPrompt).not.toContain('结合你对艺人及所列流派的真实音乐美学认知');
+
+      // 3. Repeated request with unchanged evidence hits SQLite cache
+      const cached = await app.inject({ method: 'POST', url: `/api/albums/${alb.id}/review`, headers: { cookie }, payload: {} });
+      expect(cached.statusCode).toBe(200);
+      expect(callCount).toBe(1);
+
+      // 4. Additional detail evidence from another source invalidates hash and regenerates cleanly
+      const pitchforkDetailHtml = `
+        <html><head><meta name="description" content="Sharp nocturnal synthesizers frame every hook." /></head>
+        <body><article><p>Across nine focused tracks, Soft Halo trades haze for crystalline pulse and stark vocal poise.</p></article></body></html>
+      `;
+      const seed2 = new Store(dir);
+      const latestAlb = seed2.albums()[0]!;
+      const p4kObs = latestAlb.sources.find((s) => s.source === 'pitchfork')!;
+      p4kObs.editorialSummary = 'Sharp nocturnal synthesizers frame every hook.';
+      p4kObs.detailCaptured = true;
+      seed2.saveAlbums([latestAlb]);
+      seed2.close();
+      void pitchforkDetailHtml;
+
+      const regenerated = await app.inject({ method: 'POST', url: `/api/albums/${alb.id}/review`, headers: { cookie }, payload: {} });
+      expect(regenerated.statusCode).toBe(200);
+      expect(regenerated.json().review.evidenceLevel).toBe('full');
       expect(callCount).toBe(2);
     } finally {
       await app.close();
@@ -432,11 +475,13 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
     }
   });
 
-  it('prioritizes selected non-admitted detail URLs in /api/ext/config only when detailBackfill is enabled', async () => {
+  it('prioritizes zero-evidence selected albums breadth-first (P4K -> AOTY -> RYM) in /api/ext/config', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'relay-ext-backfill-'));
     const unadmittedSelected = makeAlbum('Act One', 'Priority LP', ['Rock'], { detailCaptured: false });
     const admittedSelected = makeAlbum('Act Two', 'Already In Playlist', ['Rock'], { detailCaptured: false, admittedMonth: '2026-11' });
     const alreadyDetailed = makeAlbum('Act Three', 'Detailed LP', ['Rock'], { detailCaptured: true });
+    const hasP4kSnippetFromChart = makeAlbum('Act Four', 'Has Summary LP', ['Rock'], { p4kScore: 8.2, detailCaptured: false });
+    hasP4kSnippetFromChart.sources[2]!.editorialSummary = 'Chart dek already captured.';
     unadmittedSelected.sources.push({
       source: 'pitchfork',
       score: null,
@@ -448,7 +493,7 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
     });
 
     const seed = new Store(dir);
-    seed.saveAlbums([admittedSelected, unadmittedSelected, alreadyDetailed]);
+    seed.saveAlbums([admittedSelected, unadmittedSelected, alreadyDetailed, hasP4kSnippetFromChart]);
     seed.close();
 
     const app = await createApp({ dataDir: dir, scheduler: false });
@@ -462,7 +507,7 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
       expect(cfgDefault.detailBackfill).toMatchObject({
         enabled: true,
         batchSize: 4,
-        pendingCount: 4
+        pendingCount: 7
       });
 
       // Disable detailBackfill -> omits detailBackfill field cleanly
@@ -480,7 +525,7 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
       const cfgOff = (await app.inject({ url: '/api/ext/config', headers: { authorization: `Bearer ${token}` } })).json();
       expect(cfgOff.detailBackfill).toBeUndefined();
 
-      // Enable detailBackfill with batchSize = 2
+      // Enable detailBackfill with batchSize = 2: picks 1 primary AOTY URL per zero-evidence album (covering BOTH albums)
       const putRes = await app.inject({
         method: 'PUT',
         url: '/api/extension/refresh',
@@ -494,18 +539,44 @@ describe('Ollama / AI configuration, audience+critic reviews, taste curator, and
         }
       });
       expect(putRes.statusCode).toBe(200);
-      expect(putRes.json().pendingDetailCount).toBe(4); // 2 canonical URLs on unadmitted + 2 on admitted (excludes search URL & alreadyDetailed)
+      expect(putRes.json().pendingDetailCount).toBe(7);
 
-      const cfgOn = (await app.inject({ url: '/api/ext/config', headers: { authorization: `Bearer ${token}` } })).json();
-      expect(cfgOn.detailBackfill).toMatchObject({
+      const cfgBatch2 = (await app.inject({ url: '/api/ext/config', headers: { authorization: `Bearer ${token}` } })).json();
+      expect(cfgBatch2.detailBackfill).toMatchObject({
         enabled: true,
         batchSize: 2,
-        pendingCount: 4
+        pendingCount: 7
       });
-      // First 2 targets come from the unadmitted selected album and exclude the non-canonical Pitchfork search URL
-      expect(cfgOn.detailBackfill.targets).toEqual([
-        unadmittedSelected.sources[0]!.url,
-        unadmittedSelected.sources[1]!.url
+      expect(cfgBatch2.detailBackfill.targets).toEqual([
+        unadmittedSelected.sources[1]!.url, // Act One AOTY (excludes search URL, prefers AOTY over RYM)
+        admittedSelected.sources[1]!.url    // Act Two AOTY (covers 2nd zero-evidence album before 1st album's RYM)
+      ]);
+
+      // Canonical Pitchfork URL takes priority over AOTY/RYM when present, and Pass 2 fills remaining capacity
+      unadmittedSelected.sources[2]!.url = 'https://pitchfork.com/reviews/albums/act-one-priority-lp/';
+      unadmittedSelected.sources[2]!.status = 'ok';
+      const seed2 = new Store(dir);
+      seed2.saveAlbums([admittedSelected, unadmittedSelected, alreadyDetailed, hasP4kSnippetFromChart]);
+      seed2.close();
+
+      await app.inject({
+        method: 'PUT',
+        url: '/api/extension/refresh',
+        headers: { cookie },
+        payload: {
+          enabled: true,
+          hour: 10,
+          targets: ['https://rateyourmusic.com/charts/top/album/{year}/1/'],
+          detailBackfill: true,
+          detailBatchSize: 4
+        }
+      });
+      const cfgBatch4 = (await app.inject({ url: '/api/ext/config', headers: { authorization: `Bearer ${token}` } })).json();
+      expect(cfgBatch4.detailBackfill.targets).toEqual([
+        unadmittedSelected.sources[2]!.url, // Pass 1: Act One Pitchfork first
+        admittedSelected.sources[1]!.url,   // Pass 1: Act Two AOTY second (zero-evidence coverage before Act Four)
+        unadmittedSelected.sources[1]!.url, // Pass 2: secondary sources (Act One AOTY)
+        unadmittedSelected.sources[0]!.url  // Pass 2: secondary sources (Act One RYM)
       ]);
     } finally {
       await app.close();

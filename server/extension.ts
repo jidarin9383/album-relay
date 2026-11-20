@@ -1,8 +1,11 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { hasAlbumReviewEvidence } from '../shared/review-evidence.js';
 import type { Album, ExtensionRefresh, ExtensionReport, ExtensionState, SourceName } from '../shared/types.js';
 import type { Store } from './store.js';
 import { origins } from './sources/parsers.js';
 import { isCanonicalSourceDetailUrl } from './links.js';
+
+const SOURCE_BACKFILL_PRIORITY: Record<SourceName, number> = { pitchfork: 0, aoty: 1, rym: 2 };
 
 const TOKEN_KEY='extension-token';
 const REFRESH_KEY='extension-refresh';
@@ -60,24 +63,58 @@ export function selectDetailBackfillTargets(
  };
  const prioritized = active
   .filter((a) => priorityRank(a) < 99)
-  .sort((a, b) => priorityRank(a) - priorityRank(b) || a.id.localeCompare(b.id));
+  .sort((a, b) => {
+   const rankDiff = priorityRank(a) - priorityRank(b);
+   if (rankDiff !== 0) return rankDiff;
+   const missingEvidenceDiff = Number(hasAlbumReviewEvidence(a)) - Number(hasAlbumReviewEvidence(b));
+   if (missingEvidenceDiff !== 0) return missingEvidenceDiff;
+   return a.id.localeCompare(b.id);
+  });
 
  const selectedPending = new Set<string>();
- const targets: string[] = [];
- const seenTargets = new Set<string>();
+ const albumCandidates: { album: Album; urls: string[] }[] = [];
 
  for (const album of prioritized) {
   const isSelected = album.decision?.status === 'selected';
-  for (const obs of album.sources) {
+  const sortedSources = [...album.sources].sort(
+   (a, b) => SOURCE_BACKFILL_PRIORITY[a.source] - SOURCE_BACKFILL_PRIORITY[b.source]
+  );
+  const urls: string[] = [];
+  for (const obs of sortedSources) {
    if (obs.detailCaptured) continue;
    if (!isCanonicalSourceDetailUrl(obs.source, obs.url)) continue;
    if (isSelected) selectedPending.add(obs.url);
-   if (targets.length < cappedBatch && !seenTargets.has(obs.url) && !isRecent(obs.url)) {
-    seenTargets.add(obs.url);
-    targets.push(obs.url);
-   }
+   urls.push(obs.url);
+  }
+  if (urls.length) albumCandidates.push({ album, urls });
+ }
+
+ const targets: string[] = [];
+ const seenTargets = new Set<string>();
+ const canSchedule = (url: string) => !seenTargets.has(url) && !isRecent(url);
+
+ // Pass 1: Cover as many zero-evidence albums as possible (1 primary source per album first).
+ for (const { album, urls } of albumCandidates) {
+  if (targets.length >= cappedBatch) break;
+  if (hasAlbumReviewEvidence(album)) continue;
+  const primary = urls.find(canSchedule);
+  if (primary) {
+   seenTargets.add(primary);
+   targets.push(primary);
   }
  }
+
+ // Pass 2: Fill remaining batch capacity with secondary sources and already-evidenced albums.
+ for (const { urls } of albumCandidates) {
+  if (targets.length >= cappedBatch) break;
+  for (const url of urls) {
+   if (targets.length >= cappedBatch) break;
+   if (!canSchedule(url)) continue;
+   seenTargets.add(url);
+   targets.push(url);
+  }
+ }
+
  return { targets, pendingCount: selectedPending.size };
 }
 
@@ -87,7 +124,7 @@ export class ExtensionService {
  constructor(private readonly store:Store){}
  paired():boolean{return this.store.getValue(TOKEN_KEY)!==null;}
  issueToken():string{
-  const token=`ar_${randomBytes(32).toString('base64url')}`;
+  const token=`lb_${randomBytes(32).toString('base64url')}`;
   this.store.setValue(TOKEN_KEY,digest(token).toString('hex'));
   this.store.setValue(STATE_KEY,JSON.stringify({reports:[]} satisfies Partial<ExtensionState>));
   return token;
@@ -96,7 +133,7 @@ export class ExtensionService {
  authenticate(header?:string):boolean{
   const stored=this.store.getValue(TOKEN_KEY);
   if(!stored||!header)return false;
-  const match=/^Bearer (ar_[A-Za-z0-9_-]{20,100})$/.exec(header);
+  const match=/^Bearer ((?:lb|ar)_[A-Za-z0-9_-]{20,100})$/.exec(header);
   if(!match)return false;
   const expected=Buffer.from(stored,'hex'),supplied=digest(match[1]!);
   return expected.length===supplied.length&&timingSafeEqual(expected,supplied);

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import type { Store } from './store.js';
-export const AUTH_COOKIE_NAME = 'album_relay_session';
+export const AUTH_COOKIE_NAME = 'listen_better_session';
 export const AUTH_COOKIE_OPTIONS = { httpOnly:true, sameSite:'strict', path:'/', maxAge:12*60*60 } as const;
 const PASSWORD_KEY='admin_password';
 const SESSION_MS=12*60*60*1000;

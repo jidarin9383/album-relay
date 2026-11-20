@@ -110,7 +110,7 @@ it('debounces captures and runs corroboration, up to six missing links, recommen
   });
   const enqueue = vi.spyOn(reviewQueue, 'enqueueSelected').mockImplementation(() => {
     steps.push('review');
-    return { queuedCount: 0, totalSelected: 0 };
+    return { queuedCount: 0, totalSelected: 0, eligibleCount: 0, skippedNoEvidenceCount: 0 };
   });
   vi.spyOn(runner, 'start').mockImplementation((mode) => {
     steps.push(mode);
