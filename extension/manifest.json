@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Listen Better Capture",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Sends RYM, AOTY and Pitchfork album pages you open in Chrome to your own Listen Better library.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "alarms"],

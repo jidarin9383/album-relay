@@ -13,7 +13,7 @@
   const INTERSTITIAL_SELECTOR =
     '#challenge-form, #challenge-running, #cf-challenge-running, #challenge-stage, .cf-browser-verification, #challenge-error-text, #challenge-body-text, #cf-wrapper';
   const SITE_CONTENT_SELECTOR =
-    '.page_charts_section_charts_item, .albumListRow, .album_title, .albumTitle, .albumUserScore, [data-testid="ReviewPage"], main a[href^="/reviews/albums/"], article';
+    '.page_charts_section_charts_item, .albumListRow, .album_title, h1.release_title, table.album_info, .albumTitle, .albumUserScore, [data-testid="ReviewPage"], main a[href^="/reviews/albums/"], article';
   const TURNSTILE_SELECTOR =
     '#turnstile-wrapper, .cf-turnstile, iframe[src*="challenges.cloudflare.com"], input[name="cf-turnstile-response"]';
   const CHALLENGE_TITLE_RE =

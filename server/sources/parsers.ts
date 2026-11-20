@@ -4,7 +4,7 @@ import type { Album, CapturedStreamingLinks, ReviewSnippet, SourceName } from '.
 export const origins: Record<SourceName,string>={aoty:'https://www.albumoftheyear.org',rym:'https://rateyourmusic.com',pitchfork:'https://pitchfork.com'};
 export function normalizeIdentity(s:string):string{return s.normalize('NFKD').replace(/\p{M}/gu,'').toLowerCase().replace(/\s*&\s*|\s+\/\s+/g,' and ').replace(/[^\p{L}\p{N}]/gu,'');}
 export function parseVotes(value:string):number|null{const m=value.replace(/,/g,'').match(/(\d+(?:\.\d+)?)\s*([km])?/i);return m?Math.round(Number(m[1])*(m[2]?.toLowerCase()==='k'?1000:m[2]?.toLowerCase()==='m'?1000000:1)):null;}
-const CHALLENGE_RE = /just a moment|verify (?:you are|that you)|checking your browser|checking if the site connection is secure|performing security verification|complete the security check|ip address is temporarily blocked|cf-chl-|captcha|access denied|rate limit exceeded|请稍候|請稍候|请验证您是真人|确认您是真人|验证您(?:是否)?是真人|正在验证您(?:是否)?是真人|請驗證您是真人|驗證您是人類|請確認您是真人|確認您是真人|正在检查您的浏览器|正在檢查您的瀏覽器|需要检查您的连接安全性|需要檢查您的連線安全性|安全验证|安全驗證/i;
+const CHALLENGE_RE = /just a moment|verify (?:you are|that you)|checking your browser|checking if the site connection is secure|performing security verification|complete the security check|ip address is temporarily blocked|error 1015|error 1020|too many requests|cf-chl-|captcha|access denied|rate limit exceeded|请稍候|請稍候|请验证您是真人|确认您是真人|验证您(?:是否)?是真人|正在验证您(?:是否)?是真人|請驗證您是真人|驗證您是人類|請確認您是真人|確認您是真人|正在检查您的浏览器|正在檢查您的瀏覽器|需要检查您的连接安全性|需要檢查您的連線安全性|安全验证|安全驗證/i;
 export function isChallenge(html:string,status:number):boolean{return [403,429,503].includes(status)||CHALLENGE_RE.test(html.slice(0,150000));}
 function date(s:string):string{if(!s||!(/\d{4}-\d{2}-\d{2}/.test(s)||/[A-Za-z]+\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+[A-Za-z]+\s+\d{4}/.test(s)))return ''; const v=Date.parse(/^\d{4}-\d{2}-\d{2}/.test(s)?s.slice(0,10)+"T00:00:00Z":s+" UTC");return Number.isFinite(v)?new Date(v).toISOString().slice(0,10):'';}
 export function cleanImageUrl(raw?:string|null):string|undefined{
@@ -159,26 +159,77 @@ export function parseAoty(html:string,url:string):Album|null{
  }
  return a;
 }
+function rymLocaleText($:ReturnType<typeof load>,node:ReturnType<typeof $>):string{
+ const orig=node.find('.ui_name_locale_original').first().text().replace(/\s+/g,' ').trim();
+ return orig||node.text().replace(/\s+/g,' ').trim();
+}
 export function parseRym(html:string,url:string):Album|null{
  const $=load(html);
- let released='',fmt='';
- $('tr').each((_,e)=>{
-  const label=$(e).find('th,.info_hdr').text();
-  if(/Released|Release date/i.test(label))released=$(e).find('td').last().text().trim();
-  if(/^Type$/i.test(label.trim()))fmt=$(e).find('td').last().text().trim();
+ let released='',fmt='',infoArtist='',infoRatingText='';
+ const infoGenres:string[]=[],infoDescriptors:string[]=[];
+ $('table.album_info tr, tr').each((_,e)=>{
+  const label=$(e).find('th,.info_hdr').first().text().replace(/\s+/g,' ').trim();
+  if(!label)return;
+  const td=$(e).find('td').last();
+  if(!td.length)return;
+  if(!released&&/Released|Release date/i.test(label))released=td.text().replace(/\s+/g,' ').trim();
+  else if(!fmt&&/^Type$/i.test(label))fmt=td.text().replace(/\s+/g,' ').trim();
+  else if(!infoArtist&&/^Artist$/i.test(label)){
+   const links=td.find('a.artist, a').toArray().map(n=>rymLocaleText($,$(n))).filter(Boolean);
+   infoArtist=links.length?links.join(' / '):rymLocaleText($,td);
+  }else if(/Genres?$/i.test(label)){
+   infoGenres.push(...td.find('a.genre, a').toArray().map(n=>$(n).text().replace(/\s+/g,' ').trim()).filter(Boolean));
+  }else if(/Descriptors?$/i.test(label)){
+   infoDescriptors.push(...td.text().split(',').map(s=>s.replace(/\s+/g,' ').trim()).filter(Boolean));
+  }else if(!infoRatingText&&/RYM Rating/i.test(label)){
+   infoRatingText=td.text().replace(/\s+/g,' ').trim();
+  }
  });
- const score=$('[itemprop="ratingValue"], .avg_rating').first().text().trim();
- const el=$('[itemprop="ratingCount"], .num_ratings').first();
- const display=el.attr('content')||el.text().trim();
- const a=album('rym',url,$('.album_artist .artist, .album_artist a, [itemprop="byArtist"] [itemprop="name"]').first().text(),$('.album_title, h1[itemprop="name"]').first().clone().children('.album_shortcut').remove().end().text(),date(released),format(fmt||(/\/release\/album\//.test(url)?'Album':'')),number(score,5),parseVotes(display));
+ const docTitleMatch=$('title').first().text().replace(/\s+/g,' ').trim().match(/^(.*?)\s+by\s+(.*?)\s+\(([^)]+)\):/i);
+ const docTitle=docTitleMatch?.[1]?.trim()??'';
+ const docArtist=docTitleMatch?.[2]?.trim()??'';
+ const artistNode=$('.album_artist .artist, .album_artist a, .releaseartist a, [itemprop="byArtist"] [itemprop="name"]').first();
+ const artist=(artistNode.length?rymLocaleText($,artistNode):'')||infoArtist||rymLocaleText($,$('.album_info a.artist').first())||docArtist;
+ const titleEl=$('.album_title, h1.release_title, h1[itemprop="name"]').first().clone();
+ titleEl.find('.album_shortcut, .album_artist, input').remove();
+ titleEl.find('span').filter((_,s)=>$(s).find('a.artist').length>0).remove();
+ let rawTitle=rymLocaleText($,titleEl);
+ if(artist){
+  const escapedArtist=artist.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  rawTitle=rawTitle.replace(new RegExp(`\\s+By\\s+${escapedArtist}$`,'i'),'').trim();
+ }
+ const title=rawTitle||docTitle;
+
+ const aggregateRatingEl=$('[itemprop="ratingValue"]').filter((_,el)=>$(el).closest('.review, .reviews_shell').length===0).first();
+ const ratingCandidates=[
+  $('.avg_rating').first().text().trim(),
+  aggregateRatingEl.attr('content')?.trim()??'',
+  aggregateRatingEl.text().trim(),
+  infoRatingText
+ ];
+ let scoreText='';
+ for(const candidate of ratingCandidates){
+  const m=candidate.match(/(\d(?:\.\d+)?)/);
+  if(m){scoreText=m[1]!;break;}
+ }
+ const countEl=$('[itemprop="ratingCount"]').filter((_,el)=>$(el).closest('.review, .reviews_shell').length===0).first();
+ const rawDisplay=
+  $('.num_ratings').first().text().replace(/\s+/g,' ').trim()||
+  countEl.attr('content')?.trim()||
+  countEl.text().replace(/\s+/g,' ').trim()||
+  (infoRatingText.match(/from\s+([\d,.]+\s*[km]?)\s+ratings?/i)?.[1]?.trim()??'');
+ const display=rawDisplay.replace(/^from\s+/i,'').replace(/\s+ratings?$/i,'').trim();
+ const a=album('rym',url,artist,title,date(released),format(fmt||(/\/release\/album\//.test(url)?'Album':'')),number(scoreText,5),parseVotes(display));
  if(a){
   const obs=a.sources[0]!;
   obs.votesDisplay=display;
   obs.votesApproximate=/\d\s*[km]\b/i.test(display);
   obs.detailCaptured=true;
-  a.genres=[...new Set($('.release_pri_genres a, .release_sec_genres a').toArray().map(e=>$(e).text().trim()).filter(Boolean))];
+  const domGenres=$('.release_pri_genres a, .release_sec_genres a').toArray().map(e=>$(e).text().trim()).filter(Boolean);
+  a.genres=[...new Set(domGenres.length?domGenres:infoGenres)];
   const descriptorText=$('.release_pri_descriptors .comma_separated, .release_pri_descriptors').toArray().map(e=>$(e).text()).join(',');
-  const descriptors=[...new Set(descriptorText.split(',').map(s=>s.replace(/\s+/g,' ').trim()).filter(Boolean))].slice(0,15);
+  const descriptorList=descriptorText?descriptorText.split(','):infoDescriptors;
+  const descriptors=[...new Set(descriptorList.map(s=>s.replace(/\s+/g,' ').trim()).filter(Boolean))].slice(0,15);
   if(descriptors.length){obs.descriptors=descriptors;a.descriptors=descriptors;}
 
   const snippets:ReviewSnippet[]=[];
@@ -195,7 +246,7 @@ export function parseRym(html:string,url:string):Album|null{
   });
   if(snippets.length)obs.reviewSnippets=snippets;
 
-  const coverEl=$('.coverart img').first();
+  const coverEl=$('.coverart img, img.coverart_img, .page_release_art_frame img, #coverart_img').first();
   const cover=cleanImageUrl(coverEl.attr('data-src')||coverEl.attr('data-srcset')||coverEl.attr('src'));
   if(cover)a.coverUrl=cover;
   const linkScope=$('.ui_media_links_container, .release_media_links');

@@ -14,6 +14,32 @@ describe('source extraction (sanitized structural fixtures)', () => {
  const a=parseRym('<h1 class="album_title">Moon</h1><span class="album_artist"><a>Stars</a></span><span itemprop="ratingValue">3.75</span><span itemprop="ratingCount">1.2k</span><table><tr><th>Released</th><td>4 September 2026</td></tr><tr><th>Type</th><td>Album</td></tr></table>', 'https://rateyourmusic.com/release/album/stars/moon/');
  expect(a).toMatchObject({artist:'Stars',title:'Moon',releaseDate:'2026-09-04',format:'LP'}); expect(a?.sources[0]).toMatchObject({score:3.75,votes:1200,votesDisplay:'1.2k'}); expect(parseVotes('12,345 ratings')).toBe(12345);
  });
+ it('parses modern RYM release table.album_info DOM with meta ratingValue and no .album_artist', () => {
+  const html = `<!doctype html><html><head><title>The Same Place by The Olivia Tremor Control (Album, Neo-Psychedelia): Reviews, Ratings, Credits, Song list - Rate Your Music</title></head><body>
+    <meta itemprop="ratingValue" content="3.74" />
+    <div class="page_release_art_frame"><img class="coverart_img" src="//e.snmc.io/i/600/s/same-place.jpg" /></div>
+    <div class="album_title">The Same Place <input class="album_shortcut" value="[Album123]" /></div>
+    <table class="album_info">
+      <tr><th class="info_hdr">Artist</th><td><a class="artist" href="/artist/the-olivia-tremor-control">The Olivia Tremor Control</a></td></tr>
+      <tr><th class="info_hdr">Type</th><td>Album</td></tr>
+      <tr><th class="info_hdr">Released</th><td>23 October 2026</td></tr>
+      <tr><th class="info_hdr">RYM Rating</th><td><span class="avg_rating">3.74</span> / 5.0 from <span class="num_ratings"><b>3,000</b> ratings</span></td></tr>
+      <tr><th class="info_hdr">Genres</th><td><a class="genre">Neo-Psychedelia</a>, <a class="genre">Psychedelic Pop</a></td></tr>
+      <tr><th class="info_hdr">Descriptors</th><td>psychedelic, kaleidoscopic, warm</td></tr>
+    </table>
+  </body></html>`;
+  const a = parseRym(html, 'https://rateyourmusic.com/release/album/the-olivia-tremor-control/the-same-place/');
+  expect(a).toMatchObject({
+    artist: 'The Olivia Tremor Control',
+    title: 'The Same Place',
+    releaseDate: '2026-10-23',
+    format: 'LP',
+    genres: ['Neo-Psychedelia', 'Psychedelic Pop'],
+    descriptors: ['psychedelic', 'kaleidoscopic', 'warm'],
+    coverUrl: 'https://e.snmc.io/i/600/s/same-place.jpg'
+  });
+  expect(a?.sources[0]).toMatchObject({ score: 3.74, votes: 3000, votesDisplay: '3,000', detailCaptured: true });
+ });
  it('reads editorial state and never treats review publication date as release date', () => {
  const state={transformed:{review:{headerProps:{artists:[{name:'Artist'}],title:'Album',publishDate:'November 14, 2026',musicRating:{rating:8.4,bestNewMusic:true,bestNewReissue:false},infoSliceFields:{genre:'Electronic, Ambient',releaseYear:'2026'},lede:{sources:{sm:{url:'https://media.pitchfork.com/photos/cover-1.jpg'}}}},datePublished:'2026-11-13'}}};
  const a=parsePitchfork(`<script>window.__PRELOADED_STATE__ = ${JSON.stringify(state)};</script>`, 'https://pitchfork.com/reviews/albums/artist-album/');

@@ -143,5 +143,9 @@ describe('current chart capture',()=>{
   expect(()=>parseChart('aoty','<div id="turnstile-wrapper"><iframe src="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile"></iframe></div>',aotyUrl)).toThrow(/验证/);
   expect(parseChart('aoty',aotyChart+'<div class="cf-turnstile"></div>',aotyUrl).albums).toHaveLength(1);
   expect(()=>parseCapturedPage('rym','<title>请稍候…</title><p>正在验证您是否是真人</p>','https://rateyourmusic.com/release/album/stars/moon/')).toThrow(/验证/);
+  expect(()=>parseCapturedPage('rym','<title>Error 1015</title><p>Too Many Requests</p>','https://rateyourmusic.com/release/album/stars/moon/')).toThrow(/验证/);
+  const captured=parseCapturedPage('rym','<!doctype html><html><head><title>The Same Place by The Olivia Tremor Control (Album): Rate Your Music</title></head><body><div class="album_title">The Same Place</div><table class="album_info"><tr><th class="info_hdr">Artist</th><td><a class="artist">The Olivia Tremor Control</a></td></tr><tr><th class="info_hdr">Released</th><td>23 October 2026</td></tr><tr><th class="info_hdr">RYM Rating</th><td><span class="avg_rating">3.74</span> / 5.0 from <span class="num_ratings">3,000</span> ratings</td></tr><tr><th class="info_hdr">Descriptors</th><td>psychedelic, warm</td></tr></table></body></html>','https://rateyourmusic.com/release/album/the-olivia-tremor-control/the-same-place/');
+  expect(captured.albums[0]).toMatchObject({artist:'The Olivia Tremor Control',title:'The Same Place',descriptors:['psychedelic','warm']});
+  expect(captured.albums[0]?.sources[0]).toMatchObject({score:3.74,votes:3000,detailCaptured:true});
  });
 });
